@@ -1,4 +1,13 @@
+from fastapi import FastAPI
 from pydantic import BaseModel
+from gtts import gTTS
+import uuid
+import os
+
+app = FastAPI()
+
+OUTPUT_DIR = "outputs"
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 class AudioRequest(BaseModel):
     text: str
@@ -13,6 +22,6 @@ def generate_audio(request: AudioRequest):
         tts.save(file_path)
 
         return {"file": file_path}
-    
+
     except Exception as e:
         return {"error": str(e)}
