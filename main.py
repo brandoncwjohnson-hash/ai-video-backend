@@ -4,6 +4,7 @@ import requests
 import traceback
 import subprocess
 import asyncio
+import shutil
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -23,8 +24,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Ensure outputs directory exists BEFORE mount
+# Ensure folders exist BEFORE mounting
 os.makedirs("outputs", exist_ok=True)
+os.makedirs("assets", exist_ok=True)
 
 app.mount("/outputs", StaticFiles(directory="outputs"), name="outputs")
 
@@ -35,7 +37,7 @@ class VideoRequest(BaseModel):
     text: str
 
 
-# ---------------- VIDEO SOURCE ----------------
+# ---------------- PEXELS ----------------
 def get_pexels_video():
     if not PEXELS_API_KEY:
         return None
@@ -66,24 +68,14 @@ def get_pexels_video():
         return None
 
 
-# ---------------- SAFE FALLBACK ----------------
-FALLBACK_VIDEOS = [
-    "https://filesamples.com/samples/video/mp4/sample_960x400_ocean_with_audio.mp4",
-    "https://download.samplelib.com/mp4/sample-5s.mp4",
-    "https://samplelib.com/lib/preview/mp4/sample-10s.mp4"
-]
-
-
+# ---------------- LOCAL FALLBACK (FIXED) ----------------
 def get_safe_fallback_video():
-    for url in FALLBACK_VIDEOS:
-        try:
-            test = requests.head(url, timeout=5)
-            if test.status_code == 200:
-                return url
-        except:
-            continue
+    local_path = "assets/fallback.mp4"
 
-    raise Exception("No valid fallback video available")
+    if os.path.exists(local_path):
+        return local_path
+
+    raise Exception("Missing fallback video: place file at /assets/fallback.mp4")
 
 
 # ---------------- DOWNLOAD ----------------
@@ -97,10 +89,10 @@ def download_file(url, path):
                 f.write(chunk)
 
     if os.path.getsize(path) < 10000:
-        raise Exception("Downloaded video corrupted or too small")
+        raise Exception("Downloaded video too small or corrupted")
 
 
-# ---------------- MAIN ENDPOINT ----------------
+# ---------------- MAIN API ----------------
 @app.post("/generate-video")
 def generate_video(req: VideoRequest):
 
@@ -111,14 +103,17 @@ def generate_video(req: VideoRequest):
         audio_path = f"outputs/{job_id}.mp3"
         input_video = f"outputs/{job_id}_input.mp4"
 
-        # STEP 1 — video
+        # STEP 1 — video source
         video_url = get_pexels_video()
 
         if not video_url:
             video_url = get_safe_fallback_video()
 
-        # STEP 2 — download
-        download_file(video_url, input_video)
+        # STEP 2 — handle local vs remote
+        if video_url.startswith("http"):
+            download_file(video_url, input_video)
+        else:
+            shutil.copy(video_url, input_video)
 
         # STEP 3 — TTS
         async def create_audio():
@@ -177,7 +172,7 @@ def get_voices():
     }
 
 
-# ---------------- HEALTH CHECK ----------------
+# ---------------- HEALTH ----------------
 @app.get("/")
 def root():
     return {"status": "running"}
