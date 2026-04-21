@@ -30,17 +30,6 @@ def ensure_background():
         urllib.request.urlretrieve(BACKGROUND_URL, BACKGROUND_IMAGE)
 
 
-@app.post("/generate-audio")
-def generate_audio(request: VideoRequest):
-    file_id = str(uuid.uuid4())
-    audio_path = f"{OUTPUT_DIR}/{file_id}.mp3"
-
-    tts = gTTS(text=request.text, lang="en")
-    tts.save(audio_path)
-
-    return {"audio_file": audio_path}
-
-
 @app.post("/generate-video")
 def generate_video(request: VideoRequest):
     try:
@@ -50,16 +39,26 @@ def generate_video(request: VideoRequest):
 
         audio_path = f"{OUTPUT_DIR}/{file_id}.mp3"
         video_path = f"{OUTPUT_DIR}/{file_id}.mp4"
+        temp_image = f"{OUTPUT_DIR}/{file_id}_scaled.jpg"
 
-        # create audio first
+        # create audio
         tts = gTTS(text=request.text, lang="en")
         tts.save(audio_path)
+
+        # 🔥 DOWN SCALE IMAGE (CRITICAL FIX FOR VPS CRASH)
+        subprocess.run([
+            "ffmpeg",
+            "-y",
+            "-i", BACKGROUND_IMAGE,
+            "-vf", "scale=1280:720",
+            temp_image
+        ], capture_output=True)
 
         command = [
             "ffmpeg",
             "-y",
             "-loop", "1",
-            "-i", BACKGROUND_IMAGE,
+            "-i", temp_image,
             "-i", audio_path,
             "-c:v", "libx264",
             "-pix_fmt", "yuv420p",
@@ -68,24 +67,13 @@ def generate_video(request: VideoRequest):
             video_path
         ]
 
-        # 🔥 CRITICAL FIX: prevent hanging forever
-        result = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            timeout=30
-        )
+        result = subprocess.run(command, capture_output=True, text=True)
 
         return {
             "ffmpeg_return_code": result.returncode,
             "ffmpeg_error": result.stderr,
             "video_file": video_path,
             "audio_file": audio_path
-        }
-
-    except subprocess.TimeoutExpired:
-        return {
-            "error": "FFmpeg timeout (took too long)"
         }
 
     except Exception as e:
