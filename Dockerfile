@@ -2,7 +2,11 @@ FROM python:3.11
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y ffmpeg
+RUN apt-get update && apt-get install -y \
+    ffmpeg \
+    libsm6 \
+    libxext6 \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY . .
 
