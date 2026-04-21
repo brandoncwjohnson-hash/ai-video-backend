@@ -12,7 +12,7 @@ app = FastAPI()
 OUTPUT_DIR = "outputs"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# 👉 STEP LATER: put your Pexels API key here
+# ⚠️ PUT YOUR PEXELS API KEY HERE
 PEXELS_API_KEY = "PUT_YOUR_PEXELS_API_KEY_HERE"
 
 
@@ -21,29 +21,46 @@ class VideoRequest(BaseModel):
 
 
 # ----------------------------
-# 1. GET PEXELS VIDEO
+# SAFE PEXELS VIDEO FETCHER
 # ----------------------------
 def get_pexels_video(query: str):
-    headers = {"Authorization": PEXELS_API_KEY}
+    try:
+        headers = {"Authorization": PEXELS_API_KEY}
 
-    url = f"https://api.pexels.com/videos/search?query={query}&per_page=1"
-    res = requests.get(url, headers=headers).json()
+        url = f"https://api.pexels.com/videos/search?query={query}&per_page=5"
+        res = requests.get(url, headers=headers).json()
 
-    video_url = res["videos"][0]["video_files"][0]["link"]
+        videos = res.get("videos", [])
 
-    file_id = str(uuid.uuid4())
-    video_path = f"{OUTPUT_DIR}/{file_id}.mp4"
+        # fallback if empty
+        if not videos:
+            fallback = requests.get(
+                "https://api.pexels.com/videos/search?query=business&per_page=5",
+                headers=headers
+            ).json()
+            videos = fallback.get("videos", [])
 
-    video_data = requests.get(video_url).content
+        if not videos:
+            raise Exception("No videos returned from Pexels")
 
-    with open(video_path, "wb") as f:
-        f.write(video_data)
+        video_url = videos[0]["video_files"][0]["link"]
 
-    return video_path
+        file_id = str(uuid.uuid4())
+        video_path = f"{OUTPUT_DIR}/{file_id}.mp4"
+
+        video_data = requests.get(video_url).content
+
+        with open(video_path, "wb") as f:
+            f.write(video_data)
+
+        return video_path
+
+    except Exception as e:
+        raise Exception(f"Pexels error: {str(e)}")
 
 
 # ----------------------------
-# 2. GENERATE VOICE
+# VOICE GENERATION
 # ----------------------------
 def generate_voice(text, file_id):
     audio_path = f"{OUTPUT_DIR}/{file_id}.mp3"
@@ -53,21 +70,16 @@ def generate_voice(text, file_id):
 
 
 # ----------------------------
-# 3. BUILD VIDEO
+# VIDEO BUILDER
 # ----------------------------
 def build_video(bg_video, audio_file, output_file, hook, cta):
 
     command = [
         "ffmpeg", "-y",
-
-        # loop background video
         "-stream_loop", "-1",
         "-i", bg_video,
-
-        # audio
         "-i", audio_file,
 
-        # video effects
         "-vf",
         (
             "scale=1080:1920,"
@@ -85,7 +97,7 @@ def build_video(bg_video, audio_file, output_file, hook, cta):
 
 
 # ----------------------------
-# 4. MAIN ENDPOINT
+# MAIN ENDPOINT
 # ----------------------------
 @app.post("/generate-video")
 def generate_video(request: VideoRequest):
@@ -93,28 +105,31 @@ def generate_video(request: VideoRequest):
     try:
         file_id = str(uuid.uuid4())
 
-        # split script
+        # basic script split
         parts = request.text.split(".")
-
-        hook = parts[0][:60] if len(parts) > 0 else "Hook"
+        hook = parts[0][:60] if parts else "Build income online"
         cta = "Get Nomadic Wallet in bio"
 
-        # STEP 1: Pexels background
+        # 1. Pexels video
         bg_video = get_pexels_video(request.text)
 
-        # STEP 2: voice
+        # 2. voice
         audio_file = generate_voice(request.text, file_id)
 
-        # STEP 3: output path
+        # 3. output
         output_file = f"{OUTPUT_DIR}/{file_id}.mp4"
 
-        # STEP 4: build video
+        # 4. build video
         build_video(bg_video, audio_file, output_file, hook, cta)
 
         return {
             "video_url": f"/{output_file}",
-            "audio_file": audio_file
+            "audio_file": audio_file,
+            "status": "success"
         }
 
     except Exception as e:
-        return {"error": str(e)}
+        return {
+            "error": str(e),
+            "status": "failed"
+        }
