@@ -1,5 +1,3 @@
-# build-trigger-voices-2026-04-21
-
 import os
 import uuid
 import requests
@@ -18,6 +16,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 🚨 FIX: ensure outputs directory exists BEFORE mounting
+os.makedirs("outputs", exist_ok=True)
 
 app.mount("/outputs", StaticFiles(directory="outputs"), name="outputs")
 
@@ -59,7 +60,7 @@ def get_pexels_video():
 
 
 def download_file(url, path):
-    r = requests.get(url, stream=True)
+    r = requests.get(url, stream=True, timeout=30)
     with open(path, "wb") as f:
         for chunk in r.iter_content(chunk_size=1024):
             f.write(chunk)
@@ -69,8 +70,6 @@ def download_file(url, path):
 def generate_video(req: VideoRequest):
 
     job_id = str(uuid.uuid4())
-
-    os.makedirs("outputs", exist_ok=True)
 
     video_path = f"outputs/{job_id}.mp4"
     audio_path = f"outputs/{job_id}.mp3"
