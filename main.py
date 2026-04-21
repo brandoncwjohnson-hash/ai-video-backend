@@ -9,12 +9,11 @@ import urllib.request
 app = FastAPI()
 
 OUTPUT_DIR = "outputs"
-BASE_DIR = os.getcwd()
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
+BASE_DIR = os.getcwd()
 BACKGROUND_IMAGE = os.path.join(BASE_DIR, "background.jpg")
 BACKGROUND_URL = "https://images.unsplash.com/photo-1500530855697-b586d89ba3ee"
-
-os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 
 class VideoRequest(BaseModel):
@@ -26,47 +25,56 @@ def home():
     return {"status": "running"}
 
 
-def ensure_background_exists():
+def ensure_background():
     if not os.path.exists(BACKGROUND_IMAGE):
         urllib.request.urlretrieve(BACKGROUND_URL, BACKGROUND_IMAGE)
 
 
-@app.post("/generate-video")
-def generate_video(request: VideoRequest):
-    ensure_background_exists()
-
+@app.post("/generate-audio")
+def generate_audio(request: VideoRequest):
     file_id = str(uuid.uuid4())
-
     audio_path = f"{OUTPUT_DIR}/{file_id}.mp3"
-    video_path = f"{OUTPUT_DIR}/{file_id}.mp4"
 
     tts = gTTS(text=request.text, lang="en")
     tts.save(audio_path)
 
-    command = [
-        "ffmpeg",
-        "-y",
-        "-loop", "1",
-        "-i", BACKGROUND_IMAGE,
-        "-i", audio_path,
-        "-c:v", "libx264",
-        "-tune", "stillimage",
-        "-c:a", "aac",
-        "-b:a", "192k",
-        "-pix_fmt", "yuv420p",
-        "-shortest",
-        video_path
-    ]
+    return {"audio_file": audio_path}
 
-    result = subprocess.run(command, capture_output=True, text=True)
 
-    if result.returncode != 0:
+@app.post("/generate-video")
+def generate_video(request: VideoRequest):
+    try:
+        ensure_background()
+
+        file_id = str(uuid.uuid4())
+
+        audio_path = f"{OUTPUT_DIR}/{file_id}.mp3"
+        video_path = f"{OUTPUT_DIR}/{file_id}.mp4"
+
+        tts = gTTS(text=request.text, lang="en")
+        tts.save(audio_path)
+
+        command = [
+            "ffmpeg",
+            "-y",
+            "-loop", "1",
+            "-i", BACKGROUND_IMAGE,
+            "-i", audio_path,
+            "-c:v", "libx264",
+            "-pix_fmt", "yuv420p",
+            "-c:a", "aac",
+            "-shortest",
+            video_path
+        ]
+
+        result = subprocess.run(command, capture_output=True, text=True)
+
         return {
-            "error": "FFmpeg failed",
-            "details": result.stderr
+            "ffmpeg_return_code": result.returncode,
+            "ffmpeg_error": result.stderr,
+            "video_file": video_path,
+            "audio_file": audio_path
         }
 
-    return {
-        "video_file": video_path,
-        "audio_file": audio_path
-    }
+    except Exception as e:
+        return {"error": str(e)}
