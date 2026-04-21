@@ -6,10 +6,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import subprocess
-import traceback
 
 app = FastAPI()
 
+# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -18,11 +18,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# FORCE SAFE OUTPUT PATH
+# Ensure outputs folder exists
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 OUTPUT_DIR = os.path.join(BASE_DIR, "outputs")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
+# Serve outputs publicly
 app.mount("/outputs", StaticFiles(directory=OUTPUT_DIR), name="outputs")
 
 PEXELS_API_KEY = os.getenv("PEXELS_API_KEY")
@@ -47,15 +48,23 @@ def generate_video(req: VideoRequest):
         audio_path = os.path.join(OUTPUT_DIR, f"{job_id}.mp3")
         input_video = os.path.join(OUTPUT_DIR, f"{job_id}_input.mp4")
 
-        # STEP 1 — fallback video only (remove external dependency risk)
-        video_url = "https://sample-videos.com/video123/mp4/720/big_buck_bunny_720p_1mb.mp4"
+        # ----------------------------
+        # FIXED VIDEO SOURCE (STABLE CDN)
+        # ----------------------------
+        video_url = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
 
-        r = requests.get(video_url, stream=True, timeout=20)
+        # download video safely
+        r = requests.get(video_url, stream=True, timeout=30)
+        r.raise_for_status()
+
         with open(input_video, "wb") as f:
-            for chunk in r.iter_content(chunk_size=1024):
-                f.write(chunk)
+            for chunk in r.iter_content(chunk_size=1024 * 1024):
+                if chunk:
+                    f.write(chunk)
 
-        # STEP 2 — audio (100% safe)
+        # ----------------------------
+        # SAFE AUDIO GENERATION
+        # ----------------------------
         subprocess.run([
             "ffmpeg",
             "-y",
@@ -65,14 +74,17 @@ def generate_video(req: VideoRequest):
             audio_path
         ], check=True)
 
-        # STEP 3 — video render
+        # ----------------------------
+        # VIDEO RENDER
+        # ----------------------------
         cmd = [
             "ffmpeg",
             "-y",
             "-i", input_video,
             "-i", audio_path,
             "-vf",
-            "scale=720:1280:force_original_aspect_ratio=decrease,pad=720:1280:(ow-iw)/2:(oh-ih)/2,format=yuv420p",
+            "scale=720:1280:force_original_aspect_ratio=decrease,"
+            "pad=720:1280:(ow-iw)/2:(oh-ih)/2,format=yuv420p",
             "-c:v", "libx264",
             "-preset", "ultrafast",
             "-c:a", "aac",
@@ -88,6 +100,9 @@ def generate_video(req: VideoRequest):
                 "details": result.stderr
             }
 
+        # ----------------------------
+        # RETURN DOWNLOAD LINKS
+        # ----------------------------
         return {
             "status": "success",
             "video_url": f"https://vyyo4co8c8r0bkqz7x2xm9sx.178.104.247.146.sslip.io/outputs/{job_id}.mp4",
@@ -96,6 +111,5 @@ def generate_video(req: VideoRequest):
 
     except Exception as e:
         return {
-            "error": str(e),
-            "trace": traceback.format_exc()
+            "error": str(e)
         }
