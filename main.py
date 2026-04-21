@@ -3,14 +3,18 @@ import uuid
 import requests
 import traceback
 import subprocess
+import asyncio
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+import edge_tts
+
 app = FastAPI()
 
+# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -19,7 +23,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ensure outputs exists BEFORE mount (prevents crash)
+# Ensure outputs directory exists BEFORE mount
 os.makedirs("outputs", exist_ok=True)
 
 app.mount("/outputs", StaticFiles(directory="outputs"), name="outputs")
@@ -31,6 +35,7 @@ class VideoRequest(BaseModel):
     text: str
 
 
+# ---------------- VIDEO SOURCE ----------------
 def get_pexels_video():
     if not PEXELS_API_KEY:
         return None
@@ -61,24 +66,41 @@ def get_pexels_video():
         return None
 
 
+# ---------------- SAFE FALLBACK ----------------
+FALLBACK_VIDEOS = [
+    "https://filesamples.com/samples/video/mp4/sample_960x400_ocean_with_audio.mp4",
+    "https://download.samplelib.com/mp4/sample-5s.mp4",
+    "https://samplelib.com/lib/preview/mp4/sample-10s.mp4"
+]
+
+
+def get_safe_fallback_video():
+    for url in FALLBACK_VIDEOS:
+        try:
+            test = requests.head(url, timeout=5)
+            if test.status_code == 200:
+                return url
+        except:
+            continue
+
+    raise Exception("No valid fallback video available")
+
+
+# ---------------- DOWNLOAD ----------------
 def download_file(url, path):
-    try:
-        r = requests.get(url, stream=True, timeout=30)
-        r.raise_for_status()
+    r = requests.get(url, stream=True, timeout=30)
+    r.raise_for_status()
 
-        with open(path, "wb") as f:
-            for chunk in r.iter_content(chunk_size=1024):
-                if chunk:
-                    f.write(chunk)
+    with open(path, "wb") as f:
+        for chunk in r.iter_content(chunk_size=1024):
+            if chunk:
+                f.write(chunk)
 
-        # sanity check so ffmpeg doesn't crash
-        if os.path.getsize(path) < 10000:
-            raise Exception("Downloaded file too small or corrupted")
-
-    except Exception as e:
-        raise Exception(f"Download failed: {str(e)}")
+    if os.path.getsize(path) < 10000:
+        raise Exception("Downloaded video corrupted or too small")
 
 
+# ---------------- MAIN ENDPOINT ----------------
 @app.post("/generate-video")
 def generate_video(req: VideoRequest):
 
@@ -89,26 +111,23 @@ def generate_video(req: VideoRequest):
         audio_path = f"outputs/{job_id}.mp3"
         input_video = f"outputs/{job_id}_input.mp4"
 
-        # STEP 1 - video source
+        # STEP 1 — video
         video_url = get_pexels_video()
 
         if not video_url:
-            video_url = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerJoyrides.mp4"
+            video_url = get_safe_fallback_video()
 
-        # STEP 2 - download video
+        # STEP 2 — download
         download_file(video_url, input_video)
 
-        # STEP 3 - TTS
-        import edge_tts
-        import asyncio
-
+        # STEP 3 — TTS
         async def create_audio():
             communicate = edge_tts.Communicate(req.text, "en-US-AriaNeural")
             await communicate.save(audio_path)
 
         asyncio.run(create_audio())
 
-        # STEP 4 - FFmpeg render
+        # STEP 4 — FFmpeg render
         cmd = [
             "ffmpeg",
             "-y",
@@ -144,6 +163,7 @@ def generate_video(req: VideoRequest):
         }
 
 
+# ---------------- VOICES ----------------
 @app.get("/api/video/voices")
 def get_voices():
     return {
@@ -155,3 +175,9 @@ def get_voices():
             {"id": "ryan", "label": "Ryan"}
         ]
     }
+
+
+# ---------------- HEALTH CHECK ----------------
+@app.get("/")
+def root():
+    return {"status": "running"}
