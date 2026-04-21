@@ -51,6 +51,7 @@ def generate_video(request: VideoRequest):
         audio_path = f"{OUTPUT_DIR}/{file_id}.mp3"
         video_path = f"{OUTPUT_DIR}/{file_id}.mp4"
 
+        # create audio first
         tts = gTTS(text=request.text, lang="en")
         tts.save(audio_path)
 
@@ -67,13 +68,24 @@ def generate_video(request: VideoRequest):
             video_path
         ]
 
-        result = subprocess.run(command, capture_output=True, text=True)
+        # 🔥 CRITICAL FIX: prevent hanging forever
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
 
         return {
             "ffmpeg_return_code": result.returncode,
             "ffmpeg_error": result.stderr,
             "video_file": video_path,
             "audio_file": audio_path
+        }
+
+    except subprocess.TimeoutExpired:
+        return {
+            "error": "FFmpeg timeout (took too long)"
         }
 
     except Exception as e:
