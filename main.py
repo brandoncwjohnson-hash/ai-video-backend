@@ -1,6 +1,5 @@
 import os
 import uuid
-import requests
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -18,15 +17,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Ensure outputs folder exists
+# Output directory
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 OUTPUT_DIR = os.path.join(BASE_DIR, "outputs")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# Serve outputs publicly
+# Serve outputs
 app.mount("/outputs", StaticFiles(directory=OUTPUT_DIR), name="outputs")
-
-PEXELS_API_KEY = os.getenv("PEXELS_API_KEY")
 
 
 class VideoRequest(BaseModel):
@@ -46,25 +43,21 @@ def generate_video(req: VideoRequest):
 
         video_path = os.path.join(OUTPUT_DIR, f"{job_id}.mp4")
         audio_path = os.path.join(OUTPUT_DIR, f"{job_id}.mp3")
-        input_video = os.path.join(OUTPUT_DIR, f"{job_id}_input.mp4")
 
-        # ----------------------------
-        # FIXED VIDEO SOURCE (STABLE CDN)
-        # ----------------------------
-        video_url = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
+        # ---------------------------------------------------
+        # STEP 1 — GENERATE SIMPLE BACKGROUND VIDEO (NO CDN)
+        # ---------------------------------------------------
+        subprocess.run([
+            "ffmpeg",
+            "-y",
+            "-f", "lavfi",
+            "-i", "color=c=black:s=720x1280:d=10",
+            video_path
+        ], check=True)
 
-        # download video safely
-        r = requests.get(video_url, stream=True, timeout=30)
-        r.raise_for_status()
-
-        with open(input_video, "wb") as f:
-            for chunk in r.iter_content(chunk_size=1024 * 1024):
-                if chunk:
-                    f.write(chunk)
-
-        # ----------------------------
-        # SAFE AUDIO GENERATION
-        # ----------------------------
+        # ---------------------------------------------------
+        # STEP 2 — GENERATE AUDIO (100% SAFE SILENT TTS REPLACEMENT)
+        # ---------------------------------------------------
         subprocess.run([
             "ffmpeg",
             "-y",
@@ -74,22 +67,23 @@ def generate_video(req: VideoRequest):
             audio_path
         ], check=True)
 
-        # ----------------------------
-        # VIDEO RENDER
-        # ----------------------------
+        # ---------------------------------------------------
+        # STEP 3 — COMBINE VIDEO + AUDIO
+        # ---------------------------------------------------
+        final_path = os.path.join(OUTPUT_DIR, f"{job_id}_final.mp4")
+
         cmd = [
             "ffmpeg",
             "-y",
-            "-i", input_video,
+            "-i", video_path,
             "-i", audio_path,
             "-vf",
-            "scale=720:1280:force_original_aspect_ratio=decrease,"
-            "pad=720:1280:(ow-iw)/2:(oh-ih)/2,format=yuv420p",
+            "format=yuv420p",
             "-c:v", "libx264",
             "-preset", "ultrafast",
             "-c:a", "aac",
             "-shortest",
-            video_path
+            final_path
         ]
 
         result = subprocess.run(cmd, capture_output=True, text=True)
@@ -100,12 +94,12 @@ def generate_video(req: VideoRequest):
                 "details": result.stderr
             }
 
-        # ----------------------------
-        # RETURN DOWNLOAD LINKS
-        # ----------------------------
+        # ---------------------------------------------------
+        # STEP 4 — RETURN DOWNLOAD LINKS
+        # ---------------------------------------------------
         return {
             "status": "success",
-            "video_url": f"https://vyyo4co8c8r0bkqz7x2xm9sx.178.104.247.146.sslip.io/outputs/{job_id}.mp4",
+            "video_url": f"https://vyyo4co8c8r0bkqz7x2xm9sx.178.104.247.146.sslip.io/outputs/{job_id}_final.mp4",
             "audio_file": f"https://vyyo4co8c8r0bkqz7x2xm9sx.178.104.247.146.sslip.io/outputs/{job_id}.mp3"
         }
 
