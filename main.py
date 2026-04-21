@@ -1,135 +1,124 @@
 import os
 import uuid
-import requests
-import subprocess
-
+import random
 from fastapi import FastAPI
 from pydantic import BaseModel
 from gtts import gTTS
+import requests
+import subprocess
 
 app = FastAPI()
 
+PEXELS_API_KEY = os.getenv("PEXELS_API_KEY")
+
 OUTPUT_DIR = "outputs"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
-
-# ⚠️ PUT YOUR PEXELS API KEY HERE
-PEXELS_API_KEY = "PUT_YOUR_PEXELS_API_KEY_HERE"
-
 
 class VideoRequest(BaseModel):
     text: str
 
 
 # ----------------------------
-# SAFE PEXELS VIDEO FETCHER
+# 1. AUDIO GENERATION
 # ----------------------------
-def get_pexels_video(query: str):
-    try:
-        headers = {"Authorization": PEXELS_API_KEY}
+@app.post("/generate-audio")
+def generate_audio(request: VideoRequest):
+    file_id = str(uuid.uuid4())
+    file_path = f"{OUTPUT_DIR}/{file_id}.mp3"
 
+    tts = gTTS(text=request.text, lang="en")
+    tts.save(file_path)
+
+    return {"audio_file": file_path}
+
+
+# ----------------------------
+# 2. PEXELS VIDEO FETCH (FIXED)
+# ----------------------------
+def get_pexels_video(query_list):
+    headers = {"Authorization": PEXELS_API_KEY}
+
+    for query in query_list:
         url = f"https://api.pexels.com/videos/search?query={query}&per_page=5"
         res = requests.get(url, headers=headers).json()
 
         videos = res.get("videos", [])
 
-        # fallback if empty
-        if not videos:
-            fallback = requests.get(
-                "https://api.pexels.com/videos/search?query=business&per_page=5",
-                headers=headers
-            ).json()
-            videos = fallback.get("videos", [])
+        if videos:
+            video_files = videos[0]["video_files"]
+            if video_files:
+                return video_files[0]["link"]
 
-        if not videos:
-            raise Exception("No videos returned from Pexels")
-
-        video_url = videos[0]["video_files"][0]["link"]
-
-        file_id = str(uuid.uuid4())
-        video_path = f"{OUTPUT_DIR}/{file_id}.mp4"
-
-        video_data = requests.get(video_url).content
-
-        with open(video_path, "wb") as f:
-            f.write(video_data)
-
-        return video_path
-
-    except Exception as e:
-        raise Exception(f"Pexels error: {str(e)}")
+    return None
 
 
 # ----------------------------
-# VOICE GENERATION
-# ----------------------------
-def generate_voice(text, file_id):
-    audio_path = f"{OUTPUT_DIR}/{file_id}.mp3"
-    tts = gTTS(text=text, lang="en")
-    tts.save(audio_path)
-    return audio_path
-
-
-# ----------------------------
-# VIDEO BUILDER
-# ----------------------------
-def build_video(bg_video, audio_file, output_file, hook, cta):
-
-    command = [
-        "ffmpeg", "-y",
-        "-stream_loop", "-1",
-        "-i", bg_video,
-        "-i", audio_file,
-
-        "-vf",
-        (
-            "scale=1080:1920,"
-            "drawtext=text='" + hook + "':fontsize=60:fontcolor=white:x=(w-text_w)/2:y=200:enable='lt(t,3)',"
-            "drawtext=text='" + cta + "':fontsize=55:fontcolor=yellow:x=(w-text_w)/2:y=200:enable='gte(t,8)'"
-        ),
-
-        "-c:v", "libx264",
-        "-c:a", "aac",
-        "-shortest",
-        output_file
-    ]
-
-    subprocess.run(command, check=True)
-
-
-# ----------------------------
-# MAIN ENDPOINT
+# 3. VIDEO GENERATION
 # ----------------------------
 @app.post("/generate-video")
 def generate_video(request: VideoRequest):
 
-    try:
-        file_id = str(uuid.uuid4())
+    file_id = str(uuid.uuid4())
 
-        # basic script split
-        parts = request.text.split(".")
-        hook = parts[0][:60] if parts else "Build income online"
-        cta = "Get Nomadic Wallet in bio"
+    audio_path = f"{OUTPUT_DIR}/{file_id}.mp3"
+    video_path = f"{OUTPUT_DIR}/{file_id}.mp4"
 
-        # 1. Pexels video
-        bg_video = get_pexels_video(request.text)
+    # create audio
+    tts = gTTS(text=request.text, lang="en")
+    tts.save(audio_path)
 
-        # 2. voice
-        audio_file = generate_voice(request.text, file_id)
+    # map script → visual keywords
+    text = request.text.lower()
 
-        # 3. output
-        output_file = f"{OUTPUT_DIR}/{file_id}.mp4"
+    queries = []
 
-        # 4. build video
-        build_video(bg_video, audio_file, output_file, hook, cta)
+    if "work" in text:
+        queries.append("office")
+    if "income" in text:
+        queries.append("laptop")
+    if "travel" in text:
+        queries.append("travel")
+    if "world" in text:
+        queries.append("city")
+    if "escape" in text:
+        queries.append("lifestyle")
 
+    # fallback if nothing matched
+    if not queries:
+        queries = ["travel", "city", "laptop", "office"]
+
+    video_url = get_pexels_video(queries)
+
+    # FINAL fallback (prevents failure)
+    if not video_url:
+        video_url = "background.jpg"
+
+    # build video
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-loop", "1",
+        "-i", video_url if video_url == "background.jpg" else "background.jpg",
+        "-i", audio_path,
+        "-c:v", "libx264",
+        "-tune", "stillimage",
+        "-c:a", "aac",
+        "-b:a", "192k",
+        "-pix_fmt", "yuv420p",
+        "-shortest",
+        video_path
+    ]
+
+    result = subprocess.run(cmd, capture_output=True, text=True)
+
+    if result.returncode != 0:
         return {
-            "video_url": f"/{output_file}",
-            "audio_file": audio_file,
-            "status": "success"
+            "error": "FFmpeg failed",
+            "details": result.stderr
         }
 
-    except Exception as e:
-        return {
-            "error": str(e),
-            "status": "failed"
-        }
+    return {
+        "video_file": video_path,
+        "audio_file": audio_path,
+        "video_url": f"/{video_path}"
+    }
