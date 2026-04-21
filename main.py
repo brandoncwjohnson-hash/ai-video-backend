@@ -1,124 +1,140 @@
 import os
 import uuid
-import random
-from fastapi import FastAPI
-from pydantic import BaseModel
-from gtts import gTTS
 import requests
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 import subprocess
 
 app = FastAPI()
 
-PEXELS_API_KEY = os.getenv("PEXELS_API_KEY")
+# CORS (safe for frontend tools like Emergent)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-OUTPUT_DIR = "outputs"
-os.makedirs(OUTPUT_DIR, exist_ok=True)
+# Serve output videos publicly
+app.mount("/outputs", StaticFiles(directory="outputs"), name="outputs")
+
+PEXELS_API_KEY = os.getenv("PEXELS_API_KEY")
 
 class VideoRequest(BaseModel):
     text: str
 
 
-# ----------------------------
-# 1. AUDIO GENERATION
-# ----------------------------
-@app.post("/generate-audio")
-def generate_audio(request: VideoRequest):
-    file_id = str(uuid.uuid4())
-    file_path = f"{OUTPUT_DIR}/{file_id}.mp3"
+def get_pexels_video():
+    """
+    Try to fetch a usable vertical video from Pexels
+    """
+    if not PEXELS_API_KEY:
+        return None
 
-    tts = gTTS(text=request.text, lang="en")
-    tts.save(file_path)
-
-    return {"audio_file": file_path}
-
-
-# ----------------------------
-# 2. PEXELS VIDEO FETCH (FIXED)
-# ----------------------------
-def get_pexels_video(query_list):
     headers = {"Authorization": PEXELS_API_KEY}
 
-    for query in query_list:
-        url = f"https://api.pexels.com/videos/search?query={query}&per_page=5"
-        res = requests.get(url, headers=headers).json()
+    try:
+        res = requests.get(
+            "https://api.pexels.com/videos/search?query=business%20lifestyle&per_page=5",
+            headers=headers,
+            timeout=10
+        )
 
-        videos = res.get("videos", [])
+        data = res.json()
 
-        if videos:
-            video_files = videos[0]["video_files"]
-            if video_files:
-                return video_files[0]["link"]
+        videos = data.get("videos", [])
 
-    return None
+        if not videos:
+            return None
+
+        # pick first available file
+        video_files = videos[0].get("video_files", [])
+
+        if not video_files:
+            return None
+
+        return video_files[0].get("link")
+
+    except Exception as e:
+        print("Pexels error:", str(e))
+        return None
 
 
-# ----------------------------
-# 3. VIDEO GENERATION
-# ----------------------------
+def download_file(url, path):
+    r = requests.get(url, stream=True)
+    with open(path, "wb") as f:
+        for chunk in r.iter_content(chunk_size=1024):
+            f.write(chunk)
+
+
 @app.post("/generate-video")
-def generate_video(request: VideoRequest):
+def generate_video(req: VideoRequest):
 
-    file_id = str(uuid.uuid4())
+    job_id = str(uuid.uuid4())
 
-    audio_path = f"{OUTPUT_DIR}/{file_id}.mp3"
-    video_path = f"{OUTPUT_DIR}/{file_id}.mp4"
+    os.makedirs("outputs", exist_ok=True)
 
-    # create audio
-    tts = gTTS(text=request.text, lang="en")
-    tts.save(audio_path)
+    video_path = f"outputs/{job_id}.mp4"
+    audio_path = f"outputs/{job_id}.mp3"
+    input_video = f"outputs/{job_id}_input.mp4"
 
-    # map script → visual keywords
-    text = request.text.lower()
+    # STEP 1 — Get video from Pexels
+    video_url = get_pexels_video()
 
-    queries = []
-
-    if "work" in text:
-        queries.append("office")
-    if "income" in text:
-        queries.append("laptop")
-    if "travel" in text:
-        queries.append("travel")
-    if "world" in text:
-        queries.append("city")
-    if "escape" in text:
-        queries.append("lifestyle")
-
-    # fallback if nothing matched
-    if not queries:
-        queries = ["travel", "city", "laptop", "office"]
-
-    video_url = get_pexels_video(queries)
-
-    # FINAL fallback (prevents failure)
+    # STEP 2 — FALLBACK (CRITICAL FIX)
     if not video_url:
-        video_url = "background.jpg"
+        video_url = "https://sample-videos.com/video123/mp4/720/big_buck_bunny_720p_1mb.mp4"
 
-    # build video
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-loop", "1",
-        "-i", video_url if video_url == "background.jpg" else "background.jpg",
-        "-i", audio_path,
-        "-c:v", "libx264",
-        "-tune", "stillimage",
-        "-c:a", "aac",
-        "-b:a", "192k",
-        "-pix_fmt", "yuv420p",
-        "-shortest",
-        video_path
-    ]
+    download_file(video_url, input_video)
 
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    # STEP 3 — Generate simple TTS using edge-tts (fallback safe)
+    # NOTE: keeps system working even without OpenAI
+    try:
+        import edge_tts
+        import asyncio
 
-    if result.returncode != 0:
-        return {
-            "error": "FFmpeg failed",
-            "details": result.stderr
-        }
+        async def create_audio():
+            communicate = edge_tts.Communicate(req.text, "en-US-AriaNeural")
+            await communicate.save(audio_path)
 
+        asyncio.run(create_audio())
+
+    except Exception as e:
+        print("TTS error:", str(e))
+        return {"error": "TTS failed"}
+
+    # STEP 4 — Render video with FFmpeg (SAFE PIPELINE)
+    try:
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-i", input_video,
+            "-i", audio_path,
+            "-vf", "scale=720:1280,format=yuv420p",
+            "-c:v", "libx264",
+            "-c:a", "aac",
+            "-shortest",
+            video_path
+        ]
+
+        result = subprocess.run(cmd, capture_output=True, text=True)
+
+        if result.returncode != 0:
+            return {
+                "error": "FFmpeg failed",
+                "details": result.stderr
+            }
+
+    except Exception as e:
+        return {"error": str(e)}
+
+    # STEP 5 — RETURN DOWNLOADABLE LINK
     return {
-        "video_file": video_path,
-        "audio_file": audio_path,
-        "video_url": f"/{video_path}"
+        "ffmpeg_return_code": 0,
+        "video_url": f"/outputs/{job_id}.mp4",
+        "audio_file": f"/outputs/{job_id}.mp3",
+        "status": "success"
     }
