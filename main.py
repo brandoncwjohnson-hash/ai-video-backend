@@ -8,18 +8,12 @@ import subprocess
 
 app = FastAPI()
 
-# -----------------------------
-# CONFIG
-# -----------------------------
 OUTPUT_DIR = "outputs"
-BACKGROUND_IMAGE = "background.jpg"  # put any jpg/png in your project root
+BACKGROUND_IMAGE = "background.jpg"
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 
-# -----------------------------
-# MODELS
-# -----------------------------
 class AudioRequest(BaseModel):
     text: str
 
@@ -28,17 +22,11 @@ class VideoRequest(BaseModel):
     text: str
 
 
-# -----------------------------
-# HEALTH CHECK
-# -----------------------------
 @app.get("/")
 def home():
     return {"status": "running"}
 
 
-# -----------------------------
-# AUDIO GENERATION ONLY
-# -----------------------------
 @app.post("/generate-audio")
 def generate_audio(request: AudioRequest):
     try:
@@ -54,9 +42,6 @@ def generate_audio(request: AudioRequest):
         return {"error": str(e)}
 
 
-# -----------------------------
-# VIDEO GENERATION (AUDIO + IMAGE + FFMPEG)
-# -----------------------------
 @app.post("/generate-video")
 def generate_video(request: VideoRequest):
     try:
@@ -65,12 +50,11 @@ def generate_video(request: VideoRequest):
         audio_path = f"{OUTPUT_DIR}/{file_id}.mp3"
         video_path = f"{OUTPUT_DIR}/{file_id}.mp4"
 
-        # 1. Create audio from text
+        # Create audio
         tts = gTTS(text=request.text, lang="en")
         tts.save(audio_path)
 
-        # 2. Build video using FFmpeg
-        # (loop background image + audio → video)
+        # FFmpeg command
         command = [
             "ffmpeg",
             "-y",
@@ -86,7 +70,14 @@ def generate_video(request: VideoRequest):
             video_path
         ]
 
-        subprocess.run(command, check=True)
+        # 🔥 IMPORTANT FIX: show real FFmpeg error
+        result = subprocess.run(command, capture_output=True, text=True)
+
+        if result.returncode != 0:
+            return {
+                "error": "FFmpeg failed",
+                "details": result.stderr
+            }
 
         return {
             "video_file": video_path,
