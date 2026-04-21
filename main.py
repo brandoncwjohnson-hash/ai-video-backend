@@ -8,7 +8,10 @@ import subprocess
 app = FastAPI()
 
 OUTPUT_DIR = "outputs"
-BACKGROUND_IMAGE = "background.jpg"
+
+# 🔥 FIX: always use absolute path so FFmpeg never loses the file
+BASE_DIR = os.getcwd()
+BACKGROUND_IMAGE = os.path.join(BASE_DIR, "background.jpg")
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -44,9 +47,11 @@ def generate_video(request: VideoRequest):
     audio_path = f"{OUTPUT_DIR}/{file_id}.mp3"
     video_path = f"{OUTPUT_DIR}/{file_id}.mp4"
 
+    # create audio
     tts = gTTS(text=request.text, lang="en")
     tts.save(audio_path)
 
+    # 🔥 FFmpeg command
     command = [
         "ffmpeg",
         "-y",
@@ -62,6 +67,7 @@ def generate_video(request: VideoRequest):
         video_path
     ]
 
+    # 🔥 FULL ERROR OUTPUT (so we never guess again)
     result = subprocess.run(command, capture_output=True, text=True)
 
     if result.returncode != 0:
