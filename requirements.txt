@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+requests
+pydantic
+edge-tts
+aiofiles
+httpx
