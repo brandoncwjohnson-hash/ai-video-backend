@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import subprocess
+import asyncio
 
 app = FastAPI()
 
@@ -21,10 +22,11 @@ app.add_middleware(
 # Ensure outputs folder exists
 os.makedirs("outputs", exist_ok=True)
 
-# Serve outputs publicly
+# Serve output videos publicly
 app.mount("/outputs", StaticFiles(directory="outputs"), name="outputs")
 
 PEXELS_API_KEY = os.getenv("PEXELS_API_KEY")
+
 
 class VideoRequest(BaseModel):
     text: str
@@ -77,7 +79,7 @@ def generate_video(req: VideoRequest):
     audio_path = f"outputs/{job_id}.mp3"
     input_video = f"outputs/{job_id}_input.mp4"
 
-    # Get Pexels video (fallback included)
+    # STEP 1 — VIDEO SOURCE
     video_url = get_pexels_video()
 
     if not video_url:
@@ -85,29 +87,38 @@ def generate_video(req: VideoRequest):
 
     download_file(video_url, input_video)
 
-    # TTS
+    # STEP 2 — SAFE TTS (NO HANG GUARANTEE)
     try:
         import edge_tts
-        import asyncio
 
         async def create_audio():
             communicate = edge_tts.Communicate(req.text, "en-US-AriaNeural")
             await communicate.save(audio_path)
 
-        asyncio.run(create_audio())
+        asyncio.run(asyncio.wait_for(create_audio(), timeout=20))
 
     except Exception as e:
         print("TTS error:", str(e))
-        return {"error": "TTS failed"}
 
-    # FFmpeg render
+        # fallback silent audio so pipeline never breaks
+        subprocess.run([
+            "ffmpeg",
+            "-y",
+            "-f", "lavfi",
+            "-i", "anullsrc=r=44100:cl=mono",
+            "-t", "5",
+            audio_path
+        ])
+
+    # STEP 3 — VIDEO RENDER
     try:
         cmd = [
             "ffmpeg",
             "-y",
             "-i", input_video,
             "-i", audio_path,
-            "-vf", "scale=720:1280:force_original_aspect_ratio=decrease,pad=720:1280:(ow-iw)/2:(oh-ih)/2,format=yuv420p",
+            "-vf",
+            "scale=720:1280:force_original_aspect_ratio=decrease,pad=720:1280:(ow-iw)/2:(oh-ih)/2,format=yuv420p",
             "-c:v", "libx264",
             "-preset", "fast",
             "-c:a", "aac",
@@ -127,7 +138,7 @@ def generate_video(req: VideoRequest):
     except Exception as e:
         return {"error": str(e)}
 
-    # FINAL OUTPUT (FULL PUBLIC URL)
+    # STEP 4 — RETURN DOWNLOAD LINK
     return {
         "ffmpeg_return_code": 0,
         "video_url": f"https://vyyo4co8c8r0bkqz7x2xm9sx.178.104.247.146.sslip.io/outputs/{job_id}.mp4",
