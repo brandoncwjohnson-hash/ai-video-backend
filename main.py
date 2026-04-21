@@ -4,20 +4,17 @@ from gtts import gTTS
 import uuid
 import os
 import subprocess
+import urllib.request
 
 app = FastAPI()
 
 OUTPUT_DIR = "outputs"
-
-# 🔥 FIX: always use absolute path so FFmpeg never loses the file
 BASE_DIR = os.getcwd()
+
 BACKGROUND_IMAGE = os.path.join(BASE_DIR, "background.jpg")
+BACKGROUND_URL = "https://images.unsplash.com/photo-1500530855697-b586d89ba3ee"
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
-
-
-class AudioRequest(BaseModel):
-    text: str
 
 
 class VideoRequest(BaseModel):
@@ -29,29 +26,23 @@ def home():
     return {"status": "running"}
 
 
-@app.post("/generate-audio")
-def generate_audio(request: AudioRequest):
-    file_id = str(uuid.uuid4())
-    file_path = f"{OUTPUT_DIR}/{file_id}.mp3"
-
-    tts = gTTS(text=request.text, lang="en")
-    tts.save(file_path)
-
-    return {"audio_file": file_path}
+def ensure_background_exists():
+    if not os.path.exists(BACKGROUND_IMAGE):
+        urllib.request.urlretrieve(BACKGROUND_URL, BACKGROUND_IMAGE)
 
 
 @app.post("/generate-video")
 def generate_video(request: VideoRequest):
+    ensure_background_exists()
+
     file_id = str(uuid.uuid4())
 
     audio_path = f"{OUTPUT_DIR}/{file_id}.mp3"
     video_path = f"{OUTPUT_DIR}/{file_id}.mp4"
 
-    # create audio
     tts = gTTS(text=request.text, lang="en")
     tts.save(audio_path)
 
-    # 🔥 FFmpeg command
     command = [
         "ffmpeg",
         "-y",
@@ -67,7 +58,6 @@ def generate_video(request: VideoRequest):
         video_path
     ]
 
-    # 🔥 FULL ERROR OUTPUT (so we never guess again)
     result = subprocess.run(command, capture_output=True, text=True)
 
     if result.returncode != 0:
