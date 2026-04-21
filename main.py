@@ -24,7 +24,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Ensure folders exist BEFORE mounting
+# Ensure folders exist
 os.makedirs("outputs", exist_ok=True)
 os.makedirs("assets", exist_ok=True)
 
@@ -37,7 +37,7 @@ class VideoRequest(BaseModel):
     text: str
 
 
-# ---------------- PEXELS ----------------
+# ---------------- PEXELS VIDEO ----------------
 def get_pexels_video():
     if not PEXELS_API_KEY:
         return None
@@ -68,14 +68,14 @@ def get_pexels_video():
         return None
 
 
-# ---------------- LOCAL FALLBACK (FIXED) ----------------
+# ---------------- LOCAL FALLBACK ----------------
 def get_safe_fallback_video():
     local_path = "assets/fallback.mp4"
 
     if os.path.exists(local_path):
         return local_path
 
-    raise Exception("Missing fallback video: place file at /assets/fallback.mp4")
+    raise Exception("Missing fallback video: /assets/fallback.mp4")
 
 
 # ---------------- DOWNLOAD ----------------
@@ -89,7 +89,20 @@ def download_file(url, path):
                 f.write(chunk)
 
     if os.path.getsize(path) < 10000:
-        raise Exception("Downloaded video too small or corrupted")
+        raise Exception("Downloaded file too small or corrupted")
+
+
+# ---------------- VALIDATE MP4 ----------------
+def is_valid_mp4(path):
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_format", path],
+            capture_output=True,
+            text=True
+        )
+        return result.returncode == 0
+    except:
+        return False
 
 
 # ---------------- MAIN API ----------------
@@ -103,26 +116,30 @@ def generate_video(req: VideoRequest):
         audio_path = f"outputs/{job_id}.mp3"
         input_video = f"outputs/{job_id}_input.mp4"
 
-        # STEP 1 — video source
+        # STEP 1 — GET VIDEO
         video_url = get_pexels_video()
 
         if not video_url:
             video_url = get_safe_fallback_video()
 
-        # STEP 2 — handle local vs remote
+        # STEP 2 — DOWNLOAD OR COPY
         if video_url.startswith("http"):
             download_file(video_url, input_video)
         else:
             shutil.copy(video_url, input_video)
 
-        # STEP 3 — TTS
+        # STEP 3 — VALIDATE INPUT VIDEO (CRITICAL FIX)
+        if not is_valid_mp4(input_video):
+            raise Exception("Input video is not a valid MP4 (corrupt or unsupported file)")
+
+        # STEP 4 — TTS
         async def create_audio():
             communicate = edge_tts.Communicate(req.text, "en-US-AriaNeural")
             await communicate.save(audio_path)
 
         asyncio.run(create_audio())
 
-        # STEP 4 — FFmpeg render
+        # STEP 5 — FFmpeg render
         cmd = [
             "ffmpeg",
             "-y",
