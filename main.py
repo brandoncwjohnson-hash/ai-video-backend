@@ -17,7 +17,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 🚨 FIX: ensure outputs directory exists BEFORE mounting
+# ensure outputs folder exists BEFORE mount (prevents crash)
 os.makedirs("outputs", exist_ok=True)
 
 app.mount("/outputs", StaticFiles(directory="outputs"), name="outputs")
@@ -59,11 +59,23 @@ def get_pexels_video():
         return None
 
 
+# ---------------- FIXED DOWNLOAD (CRITICAL) ----------------
 def download_file(url, path):
-    r = requests.get(url, stream=True, timeout=30)
-    with open(path, "wb") as f:
-        for chunk in r.iter_content(chunk_size=1024):
-            f.write(chunk)
+    try:
+        r = requests.get(url, stream=True, timeout=30)
+        r.raise_for_status()
+
+        with open(path, "wb") as f:
+            for chunk in r.iter_content(chunk_size=1024):
+                if chunk:
+                    f.write(chunk)
+
+        # prevent ffmpeg crashes
+        if os.path.getsize(path) < 10000:
+            raise Exception("Downloaded file too small or corrupted")
+
+    except Exception as e:
+        raise Exception(f"Download failed: {str(e)}")
 
 
 @app.post("/generate-video")
@@ -75,13 +87,17 @@ def generate_video(req: VideoRequest):
     audio_path = f"outputs/{job_id}.mp3"
     input_video = f"outputs/{job_id}_input.mp4"
 
+    # STEP 1 — video source
     video_url = get_pexels_video()
 
+    # fallback (stable source)
     if not video_url:
-        video_url = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
+        video_url = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerJoyrides.mp4"
 
+    # STEP 2 — download video safely
     download_file(video_url, input_video)
 
+    # STEP 3 — generate voice (Edge TTS)
     try:
         import edge_tts
         import asyncio
@@ -95,6 +111,7 @@ def generate_video(req: VideoRequest):
     except Exception as e:
         return {"error": str(e)}
 
+    # STEP 4 — render video
     cmd = [
         "ffmpeg",
         "-y",
@@ -110,8 +127,12 @@ def generate_video(req: VideoRequest):
     result = subprocess.run(cmd, capture_output=True, text=True)
 
     if result.returncode != 0:
-        return {"error": result.stderr}
+        return {
+            "error": "FFmpeg failed",
+            "details": result.stderr
+        }
 
+    # STEP 5 — return output
     return {
         "status": "success",
         "video_url": f"/outputs/{job_id}.mp4",
@@ -119,6 +140,7 @@ def generate_video(req: VideoRequest):
     }
 
 
+# ---------------- VOICES ENDPOINT ----------------
 @app.get("/api/video/voices")
 def get_voices():
     return {
