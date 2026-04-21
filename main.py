@@ -1,110 +1,119 @@
+import os
+import uuid
+import requests
+import subprocess
+
 from fastapi import FastAPI
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from gtts import gTTS
-import uuid
-import os
-import subprocess
-import urllib.request
 
 app = FastAPI()
 
-# =========================
-# FOLDERS
-# =========================
 OUTPUT_DIR = "outputs"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-BASE_DIR = os.getcwd()
-BACKGROUND_IMAGE = os.path.join(BASE_DIR, "background.jpg")
-BACKGROUND_URL = "https://images.unsplash.com/photo-1500530855697-b586d89ba3ee"
+# 👉 STEP LATER: put your Pexels API key here
+PEXELS_API_KEY = "PUT_YOUR_PEXELS_API_KEY_HERE"
 
 
-# =========================
-# REQUEST MODEL
-# =========================
 class VideoRequest(BaseModel):
     text: str
 
 
-# =========================
-# STATIC FILE ACCESS
-# =========================
-app.mount("/outputs", StaticFiles(directory="outputs"), name="outputs")
+# ----------------------------
+# 1. GET PEXELS VIDEO
+# ----------------------------
+def get_pexels_video(query: str):
+    headers = {"Authorization": PEXELS_API_KEY}
+
+    url = f"https://api.pexels.com/videos/search?query={query}&per_page=1"
+    res = requests.get(url, headers=headers).json()
+
+    video_url = res["videos"][0]["video_files"][0]["link"]
+
+    file_id = str(uuid.uuid4())
+    video_path = f"{OUTPUT_DIR}/{file_id}.mp4"
+
+    video_data = requests.get(video_url).content
+
+    with open(video_path, "wb") as f:
+        f.write(video_data)
+
+    return video_path
 
 
-# =========================
-# HEALTH CHECK
-# =========================
-@app.get("/")
-def home():
-    return {"status": "running"}
+# ----------------------------
+# 2. GENERATE VOICE
+# ----------------------------
+def generate_voice(text, file_id):
+    audio_path = f"{OUTPUT_DIR}/{file_id}.mp3"
+    tts = gTTS(text=text, lang="en")
+    tts.save(audio_path)
+    return audio_path
 
 
-# =========================
-# DOWNLOAD BACKGROUND IF MISSING
-# =========================
-def ensure_background():
-    if not os.path.exists(BACKGROUND_IMAGE):
-        urllib.request.urlretrieve(BACKGROUND_URL, BACKGROUND_IMAGE)
+# ----------------------------
+# 3. BUILD VIDEO
+# ----------------------------
+def build_video(bg_video, audio_file, output_file, hook, cta):
+
+    command = [
+        "ffmpeg", "-y",
+
+        # loop background video
+        "-stream_loop", "-1",
+        "-i", bg_video,
+
+        # audio
+        "-i", audio_file,
+
+        # video effects
+        "-vf",
+        (
+            "scale=1080:1920,"
+            "drawtext=text='" + hook + "':fontsize=60:fontcolor=white:x=(w-text_w)/2:y=200:enable='lt(t,3)',"
+            "drawtext=text='" + cta + "':fontsize=55:fontcolor=yellow:x=(w-text_w)/2:y=200:enable='gte(t,8)'"
+        ),
+
+        "-c:v", "libx264",
+        "-c:a", "aac",
+        "-shortest",
+        output_file
+    ]
+
+    subprocess.run(command, check=True)
 
 
-# =========================
-# MAIN ENDPOINT
-# =========================
+# ----------------------------
+# 4. MAIN ENDPOINT
+# ----------------------------
 @app.post("/generate-video")
 def generate_video(request: VideoRequest):
-    try:
-        ensure_background()
 
+    try:
         file_id = str(uuid.uuid4())
 
-        audio_path = f"{OUTPUT_DIR}/{file_id}.mp3"
-        video_path = f"{OUTPUT_DIR}/{file_id}.mp4"
-        scaled_image = f"{OUTPUT_DIR}/{file_id}_scaled.jpg"
+        # split script
+        parts = request.text.split(".")
 
-        # -------------------------
-        # 1. TEXT → SPEECH
-        # -------------------------
-        tts = gTTS(text=request.text, lang="en")
-        tts.save(audio_path)
+        hook = parts[0][:60] if len(parts) > 0 else "Hook"
+        cta = "Get Nomadic Wallet in bio"
 
-        # -------------------------
-        # 2. SCALE IMAGE (CRITICAL FOR VPS STABILITY)
-        # -------------------------
-        subprocess.run([
-            "ffmpeg",
-            "-y",
-            "-i", BACKGROUND_IMAGE,
-            "-vf", "scale=1280:720",
-            scaled_image
-        ], capture_output=True)
+        # STEP 1: Pexels background
+        bg_video = get_pexels_video(request.text)
 
-        # -------------------------
-        # 3. IMAGE + AUDIO → VIDEO
-        # -------------------------
-        command = [
-            "ffmpeg",
-            "-y",
-            "-loop", "1",
-            "-i", scaled_image,
-            "-i", audio_path,
-            "-c:v", "libx264",
-            "-pix_fmt", "yuv420p",
-            "-c:a", "aac",
-            "-shortest",
-            video_path
-        ]
+        # STEP 2: voice
+        audio_file = generate_voice(request.text, file_id)
 
-        result = subprocess.run(command, capture_output=True, text=True)
+        # STEP 3: output path
+        output_file = f"{OUTPUT_DIR}/{file_id}.mp4"
 
-        # -------------------------
-        # 4. RETURN DOWNLOADABLE URL
-        # -------------------------
+        # STEP 4: build video
+        build_video(bg_video, audio_file, output_file, hook, cta)
+
         return {
-            "ffmpeg_return_code": result.returncode,
-            "video_url": f"http://vyyo4co8c8r0bkqz7x2xm9sx.178.104.247.146.sslip.io/{video_path}",
-            "audio_file": audio_path
+            "video_url": f"/{output_file}",
+            "audio_file": audio_file
         }
 
     except Exception as e:
