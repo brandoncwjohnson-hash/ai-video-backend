@@ -1,4 +1,3 @@
-import os
 import uuid
 import requests
 import traceback
@@ -14,6 +13,7 @@ from pydantic import BaseModel
 import edge_tts
 
 app = FastAPI()
+app.mount("/outputs", StaticFiles(directory="outputs"), name="outputs")
 
 # CORS
 app.add_middleware(
