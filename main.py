@@ -55,7 +55,7 @@ def split_into_scenes(script: str):
     ]
 
 # =========================
-# STABLE PEXELS QUERY LAYER (IMPORTANT FIX)
+# QUERY MAPPING (STABLE)
 # =========================
 
 def get_search_query(scene: str):
@@ -97,47 +97,60 @@ def get_search_query(scene: str):
     return "technology office"
 
 # =========================
-# PEXELS FETCH
+# MULTI-CLIP PEXELS FETCH
 # =========================
 
-def get_pexels_video(query: str):
+def get_pexels_clips(query: str, limit: int = 2):
     try:
         headers = {"Authorization": PEXELS_API_KEY}
 
-        fallback_queries = [
-            query,
-            "office",
-            "laptop",
-            "technology",
-            "people",
-            "city"
-        ]
+        url = f"https://api.pexels.com/videos/search?query={query}&per_page=20"
 
-        for q in fallback_queries:
-            url = f"https://api.pexels.com/videos/search?query={q}&per_page=20"
+        res = requests.get(url, headers=headers, timeout=10)
+        data = res.json()
 
-            res = requests.get(url, headers=headers, timeout=10)
-            data = res.json()
+        videos = data.get("videos", [])
 
-            videos = data.get("videos", [])
+        candidates = []
 
-            for video in videos:
-                files = video.get("video_files", [])
+        for video in videos:
+            files = video.get("video_files", [])
 
-                mp4_files = [
-                    f for f in files
-                    if f.get("file_type") == "video/mp4" and f.get("link")
-                ]
+            for f in files:
+                if f.get("file_type") != "video/mp4":
+                    continue
 
-                if mp4_files:
-                    best = sorted(mp4_files, key=lambda x: x.get("width", 0), reverse=True)[0]
-                    return best["link"]
+                link = f.get("link")
+                width = f.get("width", 0)
+                height = f.get("height", 0)
+                duration = video.get("duration", 0)
 
-        return None
+                if not link:
+                    continue
+
+                score = width
+
+                if width > height:
+                    score += 500
+
+                if 5 <= duration <= 20:
+                    score += 300
+
+                candidates.append({
+                    "link": link,
+                    "score": score
+                })
+
+        if not candidates:
+            return []
+
+        candidates = sorted(candidates, key=lambda x: x["score"], reverse=True)
+
+        return [c["link"] for c in candidates[:limit]]
 
     except Exception as e:
         print("PEXELS ERROR:", e)
-        return None
+        return []
 
 # =========================
 # VOICE GENERATION
@@ -177,22 +190,30 @@ async def worker():
                 print("Scene:", scene)
                 print("Query:", query)
 
-                video_url = get_pexels_video(query)
+                video_urls = get_pexels_clips(query, limit=2)
 
-                if video_url:
-                    clip_path = f"{OUTPUT_DIR}/{job_id}_{i}.mp4"
+                scene_clips = []
+
+                for j, video_url in enumerate(video_urls):
+                    clip_path = f"{OUTPUT_DIR}/{job_id}_{i}_{j}.mp4"
 
                     video_data = requests.get(video_url).content
 
                     with open(clip_path, "wb") as f:
                         f.write(video_data)
 
-                    video_clips.append(clip_path)
+                    scene_clips.append(clip_path)
+
+                if len(scene_clips) == 0:
+                    continue
+
+                # use best clip for now (safe concat system)
+                video_clips.append(scene_clips[0])
 
             if len(video_clips) == 0:
                 raise Exception("No valid Pexels clips found")
 
-            # CONCAT LIST
+            # CONCAT FILE
             list_file = f"{OUTPUT_DIR}/{job_id}_list.txt"
 
             with open(list_file, "w") as f:
@@ -200,7 +221,7 @@ async def worker():
                     if os.path.exists(clip):
                         f.write(f"file '{os.path.abspath(clip)}'\n")
 
-            # FINAL VIDEO
+            # FINAL OUTPUT
             output_path = f"{OUTPUT_DIR}/{job_id}_final.mp4"
 
             cmd = [
