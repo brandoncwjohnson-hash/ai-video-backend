@@ -1,44 +1,36 @@
 import uuid
 import os
 import asyncio
+import requests
 import subprocess
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from typing import Dict, Optional
 
 # =========================
-# APP INIT
+# APP SETUP
 # =========================
 
 app = FastAPI()
 
 OUTPUT_DIR = "outputs"
-ASSETS_DIR = "assets"
-
 os.makedirs(OUTPUT_DIR, exist_ok=True)
-os.makedirs(ASSETS_DIR, exist_ok=True)
 
 app.mount("/outputs", StaticFiles(directory=OUTPUT_DIR), name="outputs")
 
-# =========================
-# AVATARS
-# =========================
-
-AVATAR_IMAGES = {
-    "brandon_clone": "assets/avatars/brandon.png",
-    "male_nomad": "assets/avatars/male_nomad.png",
-    "female_nomad": "assets/avatars/female_nomad.png",
-    "generic_male": "assets/avatars/generic_male.png",
-    "generic_female": "assets/avatars/generic_female.png"
-}
+print("🔥 MVP VIDEO BACKEND STARTED")
 
 # =========================
-# JOB STORAGE (IN MEMORY)
+# CONFIG
 # =========================
 
-jobs: Dict[str, dict] = {}
+PEXELS_API_KEY = "PUT_YOUR_PEXELS_API_KEY_HERE"
 
+# =========================
+# JOB SYSTEM
+# =========================
+
+jobs = {}
 queue = asyncio.Queue()
 
 # =========================
@@ -47,67 +39,113 @@ queue = asyncio.Queue()
 
 class VideoRequest(BaseModel):
     script: str
-    avatar: str = "male_nomad"
-    voice: str = "marin"
+    avatar: str | None = None
+    voice: str = "en-US-AriaNeural"
     hook_only: bool = True
 
 # =========================
-# TTS (TEMP SIMPLE VERSION)
+# PEXELS VIDEO FETCH
 # =========================
 
-async def generate_audio(text: str, output_path: str):
+def get_pexels_video(query: str):
+    url = f"https://api.pexels.com/videos/search?query={query}&per_page=1"
+    headers = {
+        "Authorization": PEXELS_API_KEY
+    }
+
+    response = requests.get(url, headers=headers)
+    data = response.json()
+
+    if "videos" in data and len(data["videos"]) > 0:
+        video_files = data["videos"][0]["video_files"]
+        return video_files[0]["link"]
+
+    return None
+
+# =========================
+# EDGE TTS (VOICE)
+# =========================
+
+async def generate_voice(text, output_path):
     import edge_tts
-    communicate = edge_tts.Communicate(text, "en-US-GuyNeural")
+
+    communicate = edge_tts.Communicate(text, "en-US-AriaNeural")
     await communicate.save(output_path)
-
-# =========================
-# SADTALKER WRAPPER
-# =========================
-
-async def run_sadtalker(image_path, audio_path, output_path):
-    cmd = [
-        "python",
-        "SadTalker/inference.py",
-        "--source_image", image_path,
-        "--driven_audio", audio_path,
-        "--result_dir", OUTPUT_DIR
-    ]
-
-    subprocess.run(cmd, check=True)
 
 # =========================
 # WORKER
 # =========================
 
 async def worker():
+    print("🚀 WORKER STARTED")
+
     while True:
         job_id, req = await queue.get()
 
         try:
+            print(f"🎬 Processing {job_id}")
+
             jobs[job_id]["status"] = "processing"
 
-            avatar_path = AVATAR_IMAGES.get(req.avatar, AVATAR_IMAGES["male_nomad"])
-
+            # -------------------------
+            # 1. voice
+            # -------------------------
             audio_path = f"{OUTPUT_DIR}/{job_id}.mp3"
+            asyncio.run(generate_voice(req.script, audio_path))
+
+            # -------------------------
+            # 2. stock video
+            # -------------------------
+            query = req.script.split(" ")[0:3]
+            query = " ".join(query)
+
+            video_url = get_pexels_video(query)
+
+            if not video_url:
+                raise Exception("No Pexels video found")
+
             video_path = f"{OUTPUT_DIR}/{job_id}.mp4"
+            audio_path_final = audio_path
 
-            # 1. generate voice
-            await generate_audio(req.script, audio_path)
+            # download video
+            with open(video_path, "wb") as f:
+                f.write(requests.get(video_url).content)
 
-            # 2. generate talking avatar (SadTalker)
-            await run_sadtalker(avatar_path, audio_path, video_path)
+            # -------------------------
+            # 3. merge (FFmpeg)
+            # -------------------------
+            output_path = f"{OUTPUT_DIR}/{job_id}_final.mp4"
 
+            cmd = [
+                "ffmpeg",
+                "-y",
+                "-i", video_path,
+                "-i", audio_path_final,
+                "-c:v", "copy",
+                "-c:a", "aac",
+                "-shortest",
+                output_path
+            ]
+
+            subprocess.run(cmd)
+
+            # -------------------------
+            # 4. finish
+            # -------------------------
             jobs[job_id]["status"] = "complete"
-            jobs[job_id]["video_url"] = f"/outputs/{job_id}.mp4"
+            jobs[job_id]["video_url"] = f"/outputs/{job_id}_final.mp4"
+
+            print(f"✅ Done {job_id}")
 
         except Exception as e:
+            print("❌ ERROR:", str(e))
             jobs[job_id]["status"] = "failed"
             jobs[job_id]["error"] = str(e)
 
         queue.task_done()
 
 # =========================
-# START WORKER ON BOOT
+# STARTUP
 # =========================
 
 @app.on_event("startup")
@@ -115,11 +153,12 @@ async def startup():
     asyncio.create_task(worker())
 
 # =========================
-# WEBHOOK START
+# API
 # =========================
 
 @app.post("/api/video/webhook/start")
 async def start_job(req: VideoRequest):
+
     job_id = str(uuid.uuid4())
 
     jobs[job_id] = {
@@ -135,10 +174,6 @@ async def start_job(req: VideoRequest):
         "status": "queued"
     }
 
-# =========================
-# STATUS ENDPOINT
-# =========================
-
 @app.get("/api/video/status/{job_id}")
-async def get_status(job_id: str):
+async def status(job_id: str):
     return jobs.get(job_id, {"error": "job not found"})
