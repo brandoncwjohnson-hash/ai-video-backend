@@ -1,8 +1,8 @@
 import uuid
-import os
 import asyncio
-import requests
+import os
 import subprocess
+import requests
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
@@ -41,21 +41,21 @@ class VideoRequest(BaseModel):
     hook_only: bool = True
 
 # =========================
-# SCENES (UNCHANGED STRUCTURE)
+# SCENES (IMPROVED)
 # =========================
 
 def split_into_scenes(script: str):
     base = script.lower()
 
     return [
-        f"{base} hook frustration office stress laptop",
-        f"{base} ai automation software dashboard analytics",
-        f"{base} online income passive money business success",
-        f"{base} digital nomad freedom travel laptop beach"
+        f"{base} office stress frustration laptop work problem",
+        f"{base} ai automation software dashboard analytics screen",
+        f"{base} online income passive money business success laptop",
+        f"{base} digital nomad freedom travel beach laptop sunset"
     ]
 
 # =========================
-# FIXED PEXELS QUERY (IMPORTANT FIX)
+# PEXELS QUERY (FIXED)
 # =========================
 
 def get_search_query(scene: str):
@@ -100,7 +100,7 @@ def get_pexels_video(query: str):
         return None
 
 # =========================
-# TTS
+# VOICE
 # =========================
 
 async def generate_voice(text, output_path):
@@ -125,13 +125,13 @@ async def worker():
             jobs[job_id]["status"] = "processing"
 
             # -------------------------
-            # 1. VOICE
+            # AUDIO
             # -------------------------
             audio_path = f"{OUTPUT_DIR}/{job_id}.mp3"
             await generate_voice(req.script, audio_path)
 
             # -------------------------
-            # 2. SCENES → PEXELS CLIPS
+            # SCENES → CLIPS
             # -------------------------
             scenes = split_into_scenes(req.script)
 
@@ -141,7 +141,7 @@ async def worker():
                 print("🎬 Scene:", scene)
 
                 query = get_search_query(scene)
-                print("🔎 Pexels Query:", query)
+                print("🔎 Query:", query)
 
                 video_url = get_pexels_video(query)
 
@@ -154,18 +154,24 @@ async def worker():
 
                     video_clips.append(clip_path)
 
-            # HARD FAIL PROTECTION
-            if not video_clips:
-                raise Exception("No valid Pexels clips found after query filtering")
+            # -------------------------
+            # SAFETY CHECK
+            # -------------------------
+            if len(video_clips) == 0:
+                raise Exception("No valid Pexels clips found")
 
             # -------------------------
-            # 3. CONCAT VIDEOS
+            # CONCAT SAFELY
             # -------------------------
             list_file = f"{OUTPUT_DIR}/{job_id}_list.txt"
 
             with open(list_file, "w") as f:
                 for clip in video_clips:
-                    f.write(f"file '{clip}'\n")
+                    if os.path.exists(clip) and os.path.getsize(clip) > 1000:
+                        f.write(f"file '{os.path.abspath(clip)}'\n")
+
+            if os.path.getsize(list_file) == 0:
+                raise Exception("No valid clips to concatenate")
 
             output_path = f"{OUTPUT_DIR}/{job_id}_final.mp4"
 
@@ -185,15 +191,15 @@ async def worker():
             subprocess.run(cmd, check=True)
 
             # -------------------------
-            # 4. COMPLETE
+            # DONE
             # -------------------------
             jobs[job_id]["status"] = "complete"
             jobs[job_id]["video_url"] = f"/outputs/{job_id}_final.mp4"
 
-            print(f"✅ COMPLETED {job_id}")
+            print(f"✅ DONE {job_id}")
 
         except Exception as e:
-            print("❌ FAILED:", e)
+            print("❌ ERROR:", e)
             jobs[job_id]["status"] = "failed"
             jobs[job_id]["error"] = str(e)
 
