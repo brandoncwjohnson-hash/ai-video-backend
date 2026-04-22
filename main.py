@@ -87,32 +87,42 @@ def get_search_query(scene: str):
     return "technology"
 
 # =========================
-# PEXELS FIX (CRITICAL STABILITY PATCH)
+# PEXELS FIX (FINAL ROBUST VERSION)
 # =========================
 
 def get_pexels_video(query: str):
     try:
-        url = f"https://api.pexels.com/videos/search?query={query}&per_page=10"
         headers = {"Authorization": PEXELS_API_KEY}
 
-        res = requests.get(url, headers=headers, timeout=10)
-        data = res.json()
+        fallback_queries = [
+            query,
+            "technology",
+            "office",
+            "people",
+            "city"
+        ]
 
-        videos = data.get("videos", [])
+        for q in fallback_queries:
+            url = f"https://api.pexels.com/videos/search?query={q}&per_page=20"
 
-        for video in videos:
-            files = video.get("video_files", [])
+            res = requests.get(url, headers=headers, timeout=10)
+            data = res.json()
 
-            # ONLY valid MP4 files
-            mp4_files = [
-                f for f in files
-                if f.get("file_type") == "video/mp4" and f.get("link")
-            ]
+            videos = data.get("videos", [])
 
-            if mp4_files:
-                # choose highest resolution
-                best = sorted(mp4_files, key=lambda x: x.get("width", 0), reverse=True)[0]
-                return best["link"]
+            for video in videos:
+                files = video.get("video_files", [])
+
+                # ONLY valid MP4 files
+                mp4_files = [
+                    f for f in files
+                    if f.get("file_type") == "video/mp4" and f.get("link")
+                ]
+
+                if mp4_files:
+                    # choose highest resolution
+                    best = sorted(mp4_files, key=lambda x: x.get("width", 0), reverse=True)[0]
+                    return best["link"]
 
         return None
 
@@ -121,7 +131,7 @@ def get_pexels_video(query: str):
         return None
 
 # =========================
-# VOICE
+# VOICE GENERATION
 # =========================
 
 async def generate_voice(text, output_path):
