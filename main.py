@@ -41,57 +41,63 @@ class VideoRequest(BaseModel):
     hook_only: bool = False
 
 # =========================
-# SCENE SPLITTER (IMPROVED STORY STRUCTURE)
+# SCENE SPLITTER
 # =========================
 
 def split_into_scenes(script: str):
     base = script.strip()
 
     return [
-        f"HOOK: dramatic attention-grabbing visual of {base}",
-        f"MAIN: detailed working scene showing {base}",
-        f"DETAIL: close-up emotional or technical moment of {base}",
-        f"END: reflective or cinematic closing shot of {base}"
+        f"HOOK: attention grabbing opening of {base}",
+        f"MAIN: detailed working scene of {base}",
+        f"DETAIL: close up moment of {base}",
+        f"END: cinematic closing of {base}"
     ]
 
 # =========================
-# HIGH QUALITY PEXELS QUERY MAPPING
+# STABLE PEXELS QUERY LAYER (IMPORTANT FIX)
 # =========================
 
 def get_search_query(scene: str):
     scene = scene.lower()
 
-    if "developer" in scene or "coding" in scene or "programming" in scene:
-        return "software developer coding dark room multiple monitors cinematic"
+    if "developer" in scene or "coding" in scene or "programmer" in scene:
+        return "programmer coding laptop"
 
     if "freelancer" in scene:
-        return "freelancer working at night laptop aesthetic apartment desk"
+        return "freelancer working laptop"
 
-    if "night" in scene and "office" in scene:
-        return "modern office night city lights computer screens cinematic"
+    if "designer" in scene:
+        return "designer working office"
+
+    if "student" in scene or "learning" in scene:
+        return "student studying laptop"
 
     if "apartment" in scene:
-        return "modern apartment workspace night aesthetic desk laptop"
+        return "modern apartment"
+
+    if "office" in scene:
+        return "office workspace"
+
+    if "night" in scene:
+        return "city night lights"
 
     if "laptop" in scene:
-        return "close up hands typing laptop dark moody lighting"
+        return "laptop typing close up"
 
-    if "screens" in scene:
-        return "multiple monitors coding setup glowing screens"
-
-    if "working" in scene:
-        return "focused work desk night productivity aesthetic cinematic"
-
-    if "business" in scene:
-        return "startup office teamwork brainstorming modern workspace"
+    if "screens" in scene or "monitors" in scene:
+        return "computer screens office"
 
     if "ai" in scene:
-        return "artificial intelligence data visualization futuristic technology"
+        return "technology data"
 
-    return "cinematic workspace technology dark moody lighting"
+    if "startup" in scene or "business" in scene:
+        return "startup office meeting"
+
+    return "technology office"
 
 # =========================
-# PEXELS FETCH (ROBUST + FALLBACK)
+# PEXELS FETCH
 # =========================
 
 def get_pexels_video(query: str):
@@ -100,11 +106,11 @@ def get_pexels_video(query: str):
 
         fallback_queries = [
             query,
-            "cinematic workspace",
-            "technology",
             "office",
+            "laptop",
+            "technology",
             "people",
-            "city night"
+            "city"
         ]
 
         for q in fallback_queries:
@@ -156,15 +162,11 @@ async def worker():
         try:
             jobs[job_id]["status"] = "processing"
 
-            # -------------------------
             # AUDIO
-            # -------------------------
             audio_path = f"{OUTPUT_DIR}/{job_id}.mp3"
             await generate_voice(req.script, audio_path)
 
-            # -------------------------
             # SCENES
-            # -------------------------
             scenes = split_into_scenes(req.script)
 
             video_clips = []
@@ -172,8 +174,8 @@ async def worker():
             for i, scene in enumerate(scenes):
                 query = get_search_query(scene)
 
-                print("🎬 Scene:", scene)
-                print("🔎 Query:", query)
+                print("Scene:", scene)
+                print("Query:", query)
 
                 video_url = get_pexels_video(query)
 
@@ -187,28 +189,18 @@ async def worker():
 
                     video_clips.append(clip_path)
 
-            # -------------------------
-            # VALIDATION
-            # -------------------------
             if len(video_clips) == 0:
                 raise Exception("No valid Pexels clips found")
 
-            # -------------------------
-            # CONCAT FILE
-            # -------------------------
+            # CONCAT LIST
             list_file = f"{OUTPUT_DIR}/{job_id}_list.txt"
 
             with open(list_file, "w") as f:
                 for clip in video_clips:
-                    if os.path.exists(clip) and os.path.getsize(clip) > 1000:
+                    if os.path.exists(clip):
                         f.write(f"file '{os.path.abspath(clip)}'\n")
 
-            if os.path.getsize(list_file) == 0:
-                raise Exception("No valid clips to concatenate")
-
-            # -------------------------
             # FINAL VIDEO
-            # -------------------------
             output_path = f"{OUTPUT_DIR}/{job_id}_final.mp4"
 
             cmd = [
@@ -229,10 +221,10 @@ async def worker():
             jobs[job_id]["status"] = "complete"
             jobs[job_id]["video_url"] = f"/outputs/{job_id}_final.mp4"
 
-            print("✅ COMPLETED:", job_id)
+            print("DONE:", job_id)
 
         except Exception as e:
-            print("❌ ERROR:", e)
+            print("ERROR:", e)
             jobs[job_id]["status"] = "failed"
             jobs[job_id]["error"] = str(e)
 
@@ -245,10 +237,10 @@ async def worker():
 @app.on_event("startup")
 async def startup():
     asyncio.create_task(worker())
-    print("✅ SERVER READY")
+    print("SERVER READY")
 
 # =========================
-# API ROUTES
+# API
 # =========================
 
 @app.post("/api/video/webhook/start")
