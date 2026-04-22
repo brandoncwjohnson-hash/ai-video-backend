@@ -3,6 +3,7 @@ import os
 import asyncio
 import requests
 import subprocess
+
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -26,10 +27,6 @@ print("🔥 MVP VIDEO BACKEND STARTED")
 
 PEXELS_API_KEY = "PUT_YOUR_PEXELS_API_KEY_HERE"
 
-# =========================
-# JOB SYSTEM
-# =========================
-
 jobs = {}
 queue = asyncio.Queue()
 
@@ -44,26 +41,29 @@ class VideoRequest(BaseModel):
     hook_only: bool = True
 
 # =========================
-# PEXELS VIDEO FETCH
+# PEXELS
 # =========================
 
 def get_pexels_video(query: str):
-    url = f"https://api.pexels.com/videos/search?query={query}&per_page=1"
-    headers = {
-        "Authorization": PEXELS_API_KEY
-    }
+    try:
+        url = f"https://api.pexels.com/videos/search?query={query}&per_page=1"
+        headers = {"Authorization": PEXELS_API_KEY}
 
-    response = requests.get(url, headers=headers)
-    data = response.json()
+        res = requests.get(url, headers=headers, timeout=10)
+        data = res.json()
 
-    if "videos" in data and len(data["videos"]) > 0:
-        video_files = data["videos"][0]["video_files"]
-        return video_files[0]["link"]
+        if "videos" in data and len(data["videos"]) > 0:
+            video_files = data["videos"][0]["video_files"]
+            return video_files[0]["link"]
 
-    return None
+        return None
+
+    except Exception as e:
+        print("PEXELS ERROR:", e)
+        return None
 
 # =========================
-# EDGE TTS (VOICE)
+# TTS
 # =========================
 
 async def generate_voice(text, output_path):
@@ -73,7 +73,7 @@ async def generate_voice(text, output_path):
     await communicate.save(output_path)
 
 # =========================
-# WORKER
+# WORKER (FIXED)
 # =========================
 
 async def worker():
@@ -88,31 +88,28 @@ async def worker():
             jobs[job_id]["status"] = "processing"
 
             # -------------------------
-            # 1. voice
+            # 1. VOICE (FIXED)
             # -------------------------
             audio_path = f"{OUTPUT_DIR}/{job_id}.mp3"
-            asyncio.run(generate_voice(req.script, audio_path))
+            await generate_voice(req.script, audio_path)
 
             # -------------------------
-            # 2. stock video
+            # 2. PEXELS VIDEO
             # -------------------------
-            query = req.script.split(" ")[0:3]
-            query = " ".join(query)
-
+            query = " ".join(req.script.split(" ")[:3])
             video_url = get_pexels_video(query)
 
             if not video_url:
                 raise Exception("No Pexels video found")
 
             video_path = f"{OUTPUT_DIR}/{job_id}.mp4"
-            audio_path_final = audio_path
 
-            # download video
+            video_data = requests.get(video_url).content
             with open(video_path, "wb") as f:
-                f.write(requests.get(video_url).content)
+                f.write(video_data)
 
             # -------------------------
-            # 3. merge (FFmpeg)
+            # 3. MERGE (FFMPEG)
             # -------------------------
             output_path = f"{OUTPUT_DIR}/{job_id}_final.mp4"
 
@@ -120,37 +117,43 @@ async def worker():
                 "ffmpeg",
                 "-y",
                 "-i", video_path,
-                "-i", audio_path_final,
+                "-i", audio_path,
                 "-c:v", "copy",
                 "-c:a", "aac",
                 "-shortest",
                 output_path
             ]
 
-            subprocess.run(cmd)
+            subprocess.run(cmd, check=True)
 
             # -------------------------
-            # 4. finish
+            # 4. DONE
             # -------------------------
             jobs[job_id]["status"] = "complete"
             jobs[job_id]["video_url"] = f"/outputs/{job_id}_final.mp4"
 
-            print(f"✅ Done {job_id}")
+            print(f"✅ COMPLETED {job_id}")
 
         except Exception as e:
-            print("❌ ERROR:", str(e))
+            print("❌ JOB FAILED:", e)
             jobs[job_id]["status"] = "failed"
             jobs[job_id]["error"] = str(e)
 
         queue.task_done()
 
 # =========================
-# STARTUP
+# STARTUP (SAFE)
 # =========================
 
 @app.on_event("startup")
 async def startup():
-    asyncio.create_task(worker())
+    print("🚀 SERVER STARTING")
+
+    try:
+        asyncio.create_task(worker())
+        print("✅ WORKER STARTED")
+    except Exception as e:
+        print("❌ WORKER START FAILED:", e)
 
 # =========================
 # API
