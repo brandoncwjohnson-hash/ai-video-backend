@@ -38,10 +38,9 @@ class VideoRequest(BaseModel):
     script: str
     avatar: str | None = None
     voice: str = "en-US-AriaNeural"
-    hook_only: bool = False
 
 # =========================
-# SIMPLE SCENE SPLITTER
+# SCENE SPLITTER
 # =========================
 
 def split_into_scenes(script: str):
@@ -55,7 +54,7 @@ def split_into_scenes(script: str):
     ]
 
 # =========================
-# FIXED PEXELS FETCH (ROBUST)
+# PEXELS (DEBUG + ROBUST)
 # =========================
 
 def get_pexels_clips(query: str, limit: int = 2):
@@ -65,9 +64,16 @@ def get_pexels_clips(query: str, limit: int = 2):
         url = f"https://api.pexels.com/videos/search?query={query}&per_page=20"
 
         res = requests.get(url, headers=headers, timeout=10)
+
+        print("\n====================")
+        print("PEXELS QUERY:", query)
+        print("STATUS:", res.status_code)
+
         data = res.json()
 
         videos = data.get("videos", [])
+
+        print("VIDEOS FOUND:", len(videos))
 
         candidates = []
 
@@ -84,12 +90,14 @@ def get_pexels_clips(query: str, limit: int = 2):
                 height = f.get("height") or 0
                 duration = video.get("duration") or 0
 
+                print("FILE:", link, width, height, duration)
+
                 if width == 0 or height == 0:
                     continue
 
                 score = 0
 
-                # quality ranking
+                # resolution scoring
                 if width >= 1920:
                     score += 500
                 elif width >= 1280:
@@ -101,7 +109,7 @@ def get_pexels_clips(query: str, limit: int = 2):
                 if width > height:
                     score += 200
 
-                # usable duration
+                # duration sweet spot
                 if 4 <= duration <= 20:
                     score += 200
 
@@ -110,8 +118,10 @@ def get_pexels_clips(query: str, limit: int = 2):
                     "score": score
                 })
 
+        print("CANDIDATES FOUND:", len(candidates))
+
         if not candidates:
-            print("PEXELS EMPTY:", query)
+            print("❌ NO CANDIDATES FOR:", query)
             return []
 
         candidates.sort(key=lambda x: x["score"], reverse=True)
@@ -123,11 +133,10 @@ def get_pexels_clips(query: str, limit: int = 2):
         return []
 
 # =========================
-# VOICE (OPTIONAL PLACEHOLDER)
+# VOICE (PLACEHOLDER)
 # =========================
 
 async def generate_voice(text, output_path):
-    # Placeholder (replace with ElevenLabs / Edge TTS later)
     with open(output_path, "wb") as f:
         f.write(b"")
 
@@ -155,12 +164,13 @@ async def worker():
 
                 query = scene.replace("HOOK:", "").replace("MIDDLE:", "").replace("DETAIL:", "").replace("ENDING:", "").strip()
 
-                print("Scene:", scene)
-                print("Query:", query)
+                print("\nSCENE:", scene)
+                print("QUERY:", query)
 
                 video_urls = get_pexels_clips(query, limit=2)
 
                 if not video_urls:
+                    print("⚠️ NO CLIPS FOR SCENE:", i)
                     continue
 
                 clip_path = f"{OUTPUT_DIR}/{job_id}_{i}.mp4"
@@ -201,10 +211,10 @@ async def worker():
             jobs[job_id]["status"] = "complete"
             jobs[job_id]["video_url"] = f"/outputs/{job_id}_final.mp4"
 
-            print("DONE:", job_id)
+            print("✅ DONE:", job_id)
 
         except Exception as e:
-            print("ERROR:", e)
+            print("❌ ERROR:", e)
             jobs[job_id]["status"] = "failed"
             jobs[job_id]["error"] = str(e)
 
@@ -220,7 +230,7 @@ async def startup():
     print("SERVER READY")
 
 # =========================
-# API ENDPOINTS
+# API
 # =========================
 
 @app.post("/api/video/webhook/start")
