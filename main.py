@@ -2,10 +2,10 @@ import uuid
 import os
 import asyncio
 import subprocess
-
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from typing import Dict, Optional
 
 # =========================
 # APP INIT
@@ -13,17 +13,33 @@ from pydantic import BaseModel
 
 app = FastAPI()
 
-# =========================
-# DIRECTORIES
-# =========================
-
 OUTPUT_DIR = "outputs"
 ASSETS_DIR = "assets"
-FALLBACK_VIDEO = os.path.join(ASSETS_DIR, "fallback.mp4")
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+os.makedirs(ASSETS_DIR, exist_ok=True)
 
 app.mount("/outputs", StaticFiles(directory=OUTPUT_DIR), name="outputs")
+
+# =========================
+# AVATARS
+# =========================
+
+AVATAR_IMAGES = {
+    "brandon_clone": "assets/avatars/brandon.png",
+    "male_nomad": "assets/avatars/male_nomad.png",
+    "female_nomad": "assets/avatars/female_nomad.png",
+    "generic_male": "assets/avatars/generic_male.png",
+    "generic_female": "assets/avatars/generic_female.png"
+}
+
+# =========================
+# JOB STORAGE (IN MEMORY)
+# =========================
+
+jobs: Dict[str, dict] = {}
+
+queue = asyncio.Queue()
 
 # =========================
 # REQUEST MODEL
@@ -36,58 +52,71 @@ class VideoRequest(BaseModel):
     hook_only: bool = True
 
 # =========================
-# IN-MEMORY QUEUE SYSTEM
+# TTS (TEMP SIMPLE VERSION)
 # =========================
 
-jobs = {}
-queue = asyncio.Queue()
+async def generate_audio(text: str, output_path: str):
+    import edge_tts
+    communicate = edge_tts.Communicate(text, "en-US-GuyNeural")
+    await communicate.save(output_path)
 
 # =========================
-# VIDEO GENERATION (MVP)
+# SADTALKER WRAPPER
 # =========================
 
-async def generate_video(job_id: str, req: VideoRequest):
-    try:
-        jobs[job_id]["status"] = "processing"
+async def run_sadtalker(image_path, audio_path, output_path):
+    cmd = [
+        "python",
+        "SadTalker/inference.py",
+        "--source_image", image_path,
+        "--driven_audio", audio_path,
+        "--result_dir", OUTPUT_DIR
+    ]
 
-        output_file = os.path.join(OUTPUT_DIR, f"{job_id}.mp4")
-
-        # MVP: copy fallback video as generated output
-        if os.path.exists(FALLBACK_VIDEO):
-            subprocess.run(["cp", FALLBACK_VIDEO, output_file])
-        else:
-            # create empty placeholder file if fallback missing
-            with open(output_file, "wb") as f:
-                f.write(b"")
-
-        jobs[job_id]["status"] = "complete"
-        jobs[job_id]["video_url"] = f"/outputs/{job_id}.mp4"
-
-    except Exception as e:
-        jobs[job_id]["status"] = "failed"
-        jobs[job_id]["error"] = str(e)
+    subprocess.run(cmd, check=True)
 
 # =========================
-# WORKER LOOP
+# WORKER
 # =========================
 
 async def worker():
     while True:
         job_id, req = await queue.get()
-        await generate_video(job_id, req)
+
+        try:
+            jobs[job_id]["status"] = "processing"
+
+            avatar_path = AVATAR_IMAGES.get(req.avatar, AVATAR_IMAGES["male_nomad"])
+
+            audio_path = f"{OUTPUT_DIR}/{job_id}.mp3"
+            video_path = f"{OUTPUT_DIR}/{job_id}.mp4"
+
+            # 1. generate voice
+            await generate_audio(req.script, audio_path)
+
+            # 2. generate talking avatar (SadTalker)
+            await run_sadtalker(avatar_path, audio_path, video_path)
+
+            jobs[job_id]["status"] = "complete"
+            jobs[job_id]["video_url"] = f"/outputs/{job_id}.mp4"
+
+        except Exception as e:
+            jobs[job_id]["status"] = "failed"
+            jobs[job_id]["error"] = str(e)
+
         queue.task_done()
+
+# =========================
+# START WORKER ON BOOT
+# =========================
 
 @app.on_event("startup")
 async def startup():
     asyncio.create_task(worker())
 
 # =========================
-# ROUTES
+# WEBHOOK START
 # =========================
-
-@app.get("/")
-def root():
-    return {"status": "running"}
 
 @app.post("/api/video/webhook/start")
 async def start_job(req: VideoRequest):
@@ -105,6 +134,10 @@ async def start_job(req: VideoRequest):
         "job_id": job_id,
         "status": "queued"
     }
+
+# =========================
+# STATUS ENDPOINT
+# =========================
 
 @app.get("/api/video/status/{job_id}")
 async def get_status(job_id: str):
