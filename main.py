@@ -41,18 +41,10 @@ class VideoRequest(BaseModel):
     hook_only: bool = False
 
 # =========================
-# SCENE HANDLING (GENERIC - IMPORTANT)
-# Frontend controls storytelling
-# Backend only ensures fallback structure
+# SCENES (GENERIC - FRONTEND OWNS STORY)
 # =========================
 
 def split_into_scenes(script: str):
-    """
-    Generic fallback scene splitter.
-    DO NOT add storytelling logic here.
-    Frontend should provide structured scenes in future.
-    """
-
     base = script.strip()
 
     return [
@@ -63,28 +55,40 @@ def split_into_scenes(script: str):
     ]
 
 # =========================
-# PEXELS QUERY EXTRACTION (SAFE + GENERIC)
+# PEXELS QUERY FIX (IMPORTANT)
+# BROAD + RELIABLE MAPPING
 # =========================
 
 def get_search_query(scene: str):
     scene = scene.lower()
 
-    keywords = [
-        "people", "office", "technology", "laptop",
-        "city", "money", "business", "work",
-        "computer", "nature", "travel", "team",
-        "meeting", "desk", "phone", "data",
-        "analytics", "success"
-    ]
+    mapping = {
+        "coding": "programming",
+        "developer": "programming",
+        "software": "technology",
+        "laptop": "technology",
+        "computer": "technology",
+        "ai": "technology",
+        "learning": "education",
+        "study": "education",
+        "student": "education",
+        "night": "city",
+        "office": "office",
+        "work": "office",
+        "business": "business",
+        "money": "business",
+        "startup": "business",
+        "person": "people"
+    }
 
-    for k in keywords:
-        if k in scene:
-            return k
+    for key, value in mapping.items():
+        if key in scene:
+            return value
 
     return "technology"
 
 # =========================
-# PEXELS VIDEO FETCH
+# PEXELS FETCH
 # =========================
 
 def get_pexels_video(query: str):
@@ -109,7 +113,7 @@ def get_pexels_video(query: str):
         return None
 
 # =========================
-# VOICE GENERATION
+# VOICE
 # =========================
 
 async def generate_voice(text, output_path):
@@ -163,7 +167,7 @@ async def worker():
                     video_clips.append(clip_path)
 
             # -------------------------
-            # SAFETY CHECK
+            # VALIDATION
             # -------------------------
             if len(video_clips) == 0:
                 raise Exception("No valid Pexels clips found")
@@ -182,7 +186,7 @@ async def worker():
                 raise Exception("No valid clips to concatenate")
 
             # -------------------------
-            # FINAL OUTPUT
+            # FINAL VIDEO
             # -------------------------
             output_path = f"{OUTPUT_DIR}/{job_id}_final.mp4"
 
