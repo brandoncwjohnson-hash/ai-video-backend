@@ -19,7 +19,7 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 app.mount("/outputs", StaticFiles(directory=OUTPUT_DIR), name="outputs")
 
-print("🔥 MVP VIDEO BACKEND RUNNING")
+print("🔥 AI VIDEO BACKEND RUNNING")
 
 # =========================
 # CONFIG
@@ -41,26 +41,42 @@ class VideoRequest(BaseModel):
     hook_only: bool = True
 
 # =========================
-# SCENE INTELLIGENCE (UPGRADED)
+# SCENES (UNCHANGED STRUCTURE)
 # =========================
 
 def split_into_scenes(script: str):
     base = script.lower()
 
     return [
-        f"{base} hook frustration problem office stress laptop close up",
-        f"{base} ai automation software dashboard analytics screen",
-        f"{base} online income passive income money success typing laptop",
-        f"{base} digital nomad freedom travel working beach sunset laptop"
+        f"{base} hook frustration office stress laptop",
+        f"{base} ai automation software dashboard analytics",
+        f"{base} online income passive money business success",
+        f"{base} digital nomad freedom travel laptop beach"
     ]
 
 # =========================
-# PEXELS SEARCH (IMPROVED)
+# FIXED PEXELS QUERY (IMPORTANT FIX)
 # =========================
 
 def get_search_query(scene: str):
-    return scene
+    scene = scene.lower()
 
+    keywords = [
+        "ai", "technology", "laptop", "office",
+        "money", "business", "success", "work",
+        "computer", "finance", "startup",
+        "remote", "travel", "freedom", "coding"
+    ]
+
+    for k in keywords:
+        if k in scene:
+            return k
+
+    return "technology"
+
+# =========================
+# PEXELS FETCH
+# =========================
 
 def get_pexels_video(query: str):
     try:
@@ -124,7 +140,10 @@ async def worker():
             for i, scene in enumerate(scenes):
                 print("🎬 Scene:", scene)
 
-                video_url = get_pexels_video(get_search_query(scene))
+                query = get_search_query(scene)
+                print("🔎 Pexels Query:", query)
+
+                video_url = get_pexels_video(query)
 
                 if video_url:
                     clip_path = f"{OUTPUT_DIR}/{job_id}_{i}.mp4"
@@ -135,11 +154,12 @@ async def worker():
 
                     video_clips.append(clip_path)
 
+            # HARD FAIL PROTECTION
             if not video_clips:
-                raise Exception("No valid Pexels clips found")
+                raise Exception("No valid Pexels clips found after query filtering")
 
             # -------------------------
-            # 3. CONCAT CLIPS
+            # 3. CONCAT VIDEOS
             # -------------------------
             list_file = f"{OUTPUT_DIR}/{job_id}_list.txt"
 
@@ -165,7 +185,7 @@ async def worker():
             subprocess.run(cmd, check=True)
 
             # -------------------------
-            # 4. DONE
+            # 4. COMPLETE
             # -------------------------
             jobs[job_id]["status"] = "complete"
             jobs[job_id]["video_url"] = f"/outputs/{job_id}_final.mp4"
@@ -173,7 +193,7 @@ async def worker():
             print(f"✅ COMPLETED {job_id}")
 
         except Exception as e:
-            print("❌ JOB FAILED:", e)
+            print("❌ FAILED:", e)
             jobs[job_id]["status"] = "failed"
             jobs[job_id]["error"] = str(e)
 
@@ -186,9 +206,7 @@ async def worker():
 @app.on_event("startup")
 async def startup():
     print("🚀 SERVER STARTING")
-
     asyncio.create_task(worker())
-
     print("✅ WORKER READY")
 
 # =========================
