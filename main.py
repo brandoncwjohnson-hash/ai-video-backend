@@ -41,69 +41,21 @@ class VideoRequest(BaseModel):
     hook_only: bool = False
 
 # =========================
-# SCENE SPLITTER
+# SIMPLE SCENE SPLITTER
 # =========================
 
 def split_into_scenes(script: str):
-    base = script.strip()
+    script = script.strip()
 
     return [
-        f"HOOK: {base}",
-        f"MIDDLE: {base}",
-        f"DETAIL: {base}",
-        f"ENDING: {base}"
+        f"HOOK: {script}",
+        f"MIDDLE: {script}",
+        f"DETAIL: {script}",
+        f"ENDING: {script}"
     ]
 
 # =========================
-# FIXED PEXELS SAFE QUERIES
-# =========================
-
-def get_search_query(scene: str):
-    scene = scene.lower()
-
-    # 🔥 PEXELS-OPTIMIZED QUERIES (REAL DATASET MATCHES)
-
-    if "developer" in scene or "coding" in scene or "programmer" in scene:
-        return "man coding laptop"
-
-    if "freelancer" in scene:
-        return "man working laptop"
-
-    if "designer" in scene:
-        return "creative office desk"
-
-    if "apartment" in scene:
-        return "modern apartment interior"
-
-    if "night" in scene:
-        return "city night traffic"
-
-    if "city" in scene:
-        return "city timelapse night"
-
-    if "laptop" in scene:
-        return "typing on laptop close up"
-
-    if "screens" in scene or "monitors" in scene:
-        return "multiple monitors desk"
-
-    if "office" in scene:
-        return "office workspace"
-
-    if "startup" in scene or "business" in scene:
-        return "startup meeting office"
-
-    if "learning" in scene:
-        return "student studying desk"
-
-    if "ai" in scene:
-        return "technology abstract data"
-
-    # 🚨 GUARANTEE FALLBACK (NEVER FAILS)
-    return "technology office"
-
-# =========================
-# MULTI-CLIP FETCH (SAFE)
+# FIXED PEXELS FETCH (ROBUST)
 # =========================
 
 def get_pexels_clips(query: str, limit: int = 2):
@@ -123,24 +75,35 @@ def get_pexels_clips(query: str, limit: int = 2):
             files = video.get("video_files", [])
 
             for f in files:
-                if f.get("file_type") != "video/mp4":
-                    continue
 
                 link = f.get("link")
-                width = f.get("width", 0)
-                height = f.get("height", 0)
-                duration = video.get("duration", 0)
-
                 if not link:
                     continue
 
-                score = width
+                width = f.get("width") or 0
+                height = f.get("height") or 0
+                duration = video.get("duration") or 0
 
-                if width > height:
+                if width == 0 or height == 0:
+                    continue
+
+                score = 0
+
+                # quality ranking
+                if width >= 1920:
                     score += 500
-
-                if 5 <= duration <= 20:
+                elif width >= 1280:
                     score += 300
+                else:
+                    score += 100
+
+                # cinematic preference
+                if width > height:
+                    score += 200
+
+                # usable duration
+                if 4 <= duration <= 20:
+                    score += 200
 
                 candidates.append({
                     "link": link,
@@ -148,9 +111,10 @@ def get_pexels_clips(query: str, limit: int = 2):
                 })
 
         if not candidates:
+            print("PEXELS EMPTY:", query)
             return []
 
-        candidates = sorted(candidates, key=lambda x: x["score"], reverse=True)
+        candidates.sort(key=lambda x: x["score"], reverse=True)
 
         return [c["link"] for c in candidates[:limit]]
 
@@ -159,14 +123,13 @@ def get_pexels_clips(query: str, limit: int = 2):
         return []
 
 # =========================
-# VOICE GENERATION
+# VOICE (OPTIONAL PLACEHOLDER)
 # =========================
 
 async def generate_voice(text, output_path):
-    import edge_tts
-
-    communicate = edge_tts.Communicate(text, "en-US-AriaNeural")
-    await communicate.save(output_path)
+    # Placeholder (replace with ElevenLabs / Edge TTS later)
+    with open(output_path, "wb") as f:
+        f.write(b"")
 
 # =========================
 # WORKER
@@ -189,39 +152,34 @@ async def worker():
             video_clips = []
 
             for i, scene in enumerate(scenes):
-                query = get_search_query(scene)
+
+                query = scene.replace("HOOK:", "").replace("MIDDLE:", "").replace("DETAIL:", "").replace("ENDING:", "").strip()
 
                 print("Scene:", scene)
                 print("Query:", query)
 
                 video_urls = get_pexels_clips(query, limit=2)
 
-                scene_clips = []
-
-                for j, video_url in enumerate(video_urls):
-                    clip_path = f"{OUTPUT_DIR}/{job_id}_{i}_{j}.mp4"
-
-                    video_data = requests.get(video_url).content
-
-                    with open(clip_path, "wb") as f:
-                        f.write(video_data)
-
-                    scene_clips.append(clip_path)
-
-                if len(scene_clips) == 0:
+                if not video_urls:
                     continue
 
-                video_clips.append(scene_clips[0])
+                clip_path = f"{OUTPUT_DIR}/{job_id}_{i}.mp4"
 
-            if len(video_clips) == 0:
+                video_data = requests.get(video_urls[0]).content
+
+                with open(clip_path, "wb") as f:
+                    f.write(video_data)
+
+                video_clips.append(clip_path)
+
+            if not video_clips:
                 raise Exception("No valid Pexels clips found")
 
             list_file = f"{OUTPUT_DIR}/{job_id}_list.txt"
 
             with open(list_file, "w") as f:
                 for clip in video_clips:
-                    if os.path.exists(clip):
-                        f.write(f"file '{os.path.abspath(clip)}'\n")
+                    f.write(f"file '{os.path.abspath(clip)}'\n")
 
             output_path = f"{OUTPUT_DIR}/{job_id}_final.mp4"
 
@@ -262,7 +220,7 @@ async def startup():
     print("SERVER READY")
 
 # =========================
-# API
+# API ENDPOINTS
 # =========================
 
 @app.post("/api/video/webhook/start")
