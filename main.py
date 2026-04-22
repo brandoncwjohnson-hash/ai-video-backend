@@ -55,8 +55,7 @@ def split_into_scenes(script: str):
     ]
 
 # =========================
-# PEXELS QUERY FIX (IMPORTANT)
-# BROAD + RELIABLE MAPPING
+# PEXELS QUERY MAPPING
 # =========================
 
 def get_search_query(scene: str):
@@ -88,12 +87,12 @@ def get_search_query(scene: str):
     return "technology"
 
 # =========================
-# PEXELS FETCH
+# PEXELS FIX (CRITICAL STABILITY PATCH)
 # =========================
 
 def get_pexels_video(query: str):
     try:
-        url = f"https://api.pexels.com/videos/search?query={query}&per_page=5"
+        url = f"https://api.pexels.com/videos/search?query={query}&per_page=10"
         headers = {"Authorization": PEXELS_API_KEY}
 
         res = requests.get(url, headers=headers, timeout=10)
@@ -103,8 +102,17 @@ def get_pexels_video(query: str):
 
         for video in videos:
             files = video.get("video_files", [])
-            if files:
-                return files[0]["link"]
+
+            # ONLY valid MP4 files
+            mp4_files = [
+                f for f in files
+                if f.get("file_type") == "video/mp4" and f.get("link")
+            ]
+
+            if mp4_files:
+                # choose highest resolution
+                best = sorted(mp4_files, key=lambda x: x.get("width", 0), reverse=True)[0]
+                return best["link"]
 
         return None
 
