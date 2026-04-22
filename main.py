@@ -41,53 +41,57 @@ class VideoRequest(BaseModel):
     hook_only: bool = False
 
 # =========================
-# SCENES (GENERIC - FRONTEND OWNS STORY)
+# SCENE SPLITTER (IMPROVED STORY STRUCTURE)
 # =========================
 
 def split_into_scenes(script: str):
     base = script.strip()
 
     return [
-        f"{base} opening visual context",
-        f"{base} main explanation visual",
-        f"{base} supporting visual detail",
-        f"{base} closing visual context"
+        f"HOOK: dramatic attention-grabbing visual of {base}",
+        f"MAIN: detailed working scene showing {base}",
+        f"DETAIL: close-up emotional or technical moment of {base}",
+        f"END: reflective or cinematic closing shot of {base}"
     ]
 
 # =========================
-# PEXELS QUERY MAPPING
+# HIGH QUALITY PEXELS QUERY MAPPING
 # =========================
 
 def get_search_query(scene: str):
     scene = scene.lower()
 
-    mapping = {
-        "coding": "programming",
-        "developer": "programming",
-        "software": "technology",
-        "laptop": "technology",
-        "computer": "technology",
-        "ai": "technology",
-        "learning": "education",
-        "study": "education",
-        "student": "education",
-        "night": "city",
-        "office": "office",
-        "work": "office",
-        "business": "business",
-        "money": "business",
-        "startup": "business",
-        "person": "people"
-    }
+    if "developer" in scene or "coding" in scene or "programming" in scene:
+        return "software developer coding dark room multiple monitors cinematic"
 
-    for key, value in mapping.items():
-        if key in scene:
-            return value
+    if "freelancer" in scene:
+        return "freelancer working at night laptop aesthetic apartment desk"
 
-    return "technology"
+    if "night" in scene and "office" in scene:
+        return "modern office night city lights computer screens cinematic"
+
+    if "apartment" in scene:
+        return "modern apartment workspace night aesthetic desk laptop"
+
+    if "laptop" in scene:
+        return "close up hands typing laptop dark moody lighting"
+
+    if "screens" in scene:
+        return "multiple monitors coding setup glowing screens"
+
+    if "working" in scene:
+        return "focused work desk night productivity aesthetic cinematic"
+
+    if "business" in scene:
+        return "startup office teamwork brainstorming modern workspace"
+
+    if "ai" in scene:
+        return "artificial intelligence data visualization futuristic technology"
+
+    return "cinematic workspace technology dark moody lighting"
 
 # =========================
-# PEXELS FIX (FINAL ROBUST VERSION)
+# PEXELS FETCH (ROBUST + FALLBACK)
 # =========================
 
 def get_pexels_video(query: str):
@@ -96,10 +100,11 @@ def get_pexels_video(query: str):
 
         fallback_queries = [
             query,
+            "cinematic workspace",
             "technology",
             "office",
             "people",
-            "city"
+            "city night"
         ]
 
         for q in fallback_queries:
@@ -113,14 +118,12 @@ def get_pexels_video(query: str):
             for video in videos:
                 files = video.get("video_files", [])
 
-                # ONLY valid MP4 files
                 mp4_files = [
                     f for f in files
                     if f.get("file_type") == "video/mp4" and f.get("link")
                 ]
 
                 if mp4_files:
-                    # choose highest resolution
                     best = sorted(mp4_files, key=lambda x: x.get("width", 0), reverse=True)[0]
                     return best["link"]
 
@@ -191,7 +194,7 @@ async def worker():
                 raise Exception("No valid Pexels clips found")
 
             # -------------------------
-            # CONCAT LIST FILE
+            # CONCAT FILE
             # -------------------------
             list_file = f"{OUTPUT_DIR}/{job_id}_list.txt"
 
@@ -245,7 +248,7 @@ async def startup():
     print("✅ SERVER READY")
 
 # =========================
-# API
+# API ROUTES
 # =========================
 
 @app.post("/api/video/webhook/start")
