@@ -48,56 +48,62 @@ def split_into_scenes(script: str):
     base = script.strip()
 
     return [
-        f"HOOK: attention grabbing opening of {base}",
-        f"MAIN: detailed working scene of {base}",
-        f"DETAIL: close up moment of {base}",
-        f"END: cinematic closing of {base}"
+        f"HOOK: {base}",
+        f"MIDDLE: {base}",
+        f"DETAIL: {base}",
+        f"ENDING: {base}"
     ]
 
 # =========================
-# QUERY MAPPING (STABLE)
+# FIXED PEXELS SAFE QUERIES
 # =========================
 
 def get_search_query(scene: str):
     scene = scene.lower()
 
+    # 🔥 PEXELS-OPTIMIZED QUERIES (REAL DATASET MATCHES)
+
     if "developer" in scene or "coding" in scene or "programmer" in scene:
-        return "programmer coding laptop"
+        return "man coding laptop"
 
     if "freelancer" in scene:
-        return "freelancer working laptop"
+        return "man working laptop"
 
     if "designer" in scene:
-        return "designer working office"
-
-    if "student" in scene or "learning" in scene:
-        return "student studying laptop"
+        return "creative office desk"
 
     if "apartment" in scene:
-        return "modern apartment"
+        return "modern apartment interior"
+
+    if "night" in scene:
+        return "city night traffic"
+
+    if "city" in scene:
+        return "city timelapse night"
+
+    if "laptop" in scene:
+        return "typing on laptop close up"
+
+    if "screens" in scene or "monitors" in scene:
+        return "multiple monitors desk"
 
     if "office" in scene:
         return "office workspace"
 
-    if "night" in scene:
-        return "city night lights"
+    if "startup" in scene or "business" in scene:
+        return "startup meeting office"
 
-    if "laptop" in scene:
-        return "laptop typing close up"
-
-    if "screens" in scene or "monitors" in scene:
-        return "computer screens office"
+    if "learning" in scene:
+        return "student studying desk"
 
     if "ai" in scene:
-        return "technology data"
+        return "technology abstract data"
 
-    if "startup" in scene or "business" in scene:
-        return "startup office meeting"
-
+    # 🚨 GUARANTEE FALLBACK (NEVER FAILS)
     return "technology office"
 
 # =========================
-# MULTI-CLIP PEXELS FETCH
+# MULTI-CLIP FETCH (SAFE)
 # =========================
 
 def get_pexels_clips(query: str, limit: int = 2):
@@ -175,11 +181,9 @@ async def worker():
         try:
             jobs[job_id]["status"] = "processing"
 
-            # AUDIO
             audio_path = f"{OUTPUT_DIR}/{job_id}.mp3"
             await generate_voice(req.script, audio_path)
 
-            # SCENES
             scenes = split_into_scenes(req.script)
 
             video_clips = []
@@ -207,13 +211,11 @@ async def worker():
                 if len(scene_clips) == 0:
                     continue
 
-                # use best clip for now (safe concat system)
                 video_clips.append(scene_clips[0])
 
             if len(video_clips) == 0:
                 raise Exception("No valid Pexels clips found")
 
-            # CONCAT FILE
             list_file = f"{OUTPUT_DIR}/{job_id}_list.txt"
 
             with open(list_file, "w") as f:
@@ -221,7 +223,6 @@ async def worker():
                     if os.path.exists(clip):
                         f.write(f"file '{os.path.abspath(clip)}'\n")
 
-            # FINAL OUTPUT
             output_path = f"{OUTPUT_DIR}/{job_id}_final.mp4"
 
             cmd = [
