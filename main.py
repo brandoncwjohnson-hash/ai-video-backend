@@ -36,11 +36,10 @@ queue = asyncio.Queue()
 
 class VideoRequest(BaseModel):
     script: str
-    avatar: str | None = None
     voice: str = "en-US-AriaNeural"
 
 # =========================
-# SCENE SPLITTER
+# SIMPLE SCENE SPLIT
 # =========================
 
 def split_into_scenes(script: str):
@@ -54,7 +53,42 @@ def split_into_scenes(script: str):
     ]
 
 # =========================
-# PEXELS (DEBUG + ROBUST)
+# 🔥 QUERY SIMPLIFIER (CRITICAL FIX)
+# =========================
+
+def simplify_query(text: str):
+    text = text.lower()
+
+    keywords = []
+
+    if "developer" in text or "engineer" in text or "programmer" in text:
+        keywords.append("developer")
+
+    if "night" in text:
+        keywords.append("night")
+
+    if "office" in text:
+        keywords.append("office")
+
+    if "laptop" in text:
+        keywords.append("laptop")
+
+    if "city" in text or "skyline" in text:
+        keywords.append("city")
+
+    if "apartment" in text:
+        keywords.append("apartment")
+
+    if "startup" in text:
+        keywords.append("startup")
+
+    if not keywords:
+        return " ".join(text.split()[:3])
+
+    return " ".join(keywords)
+
+# =========================
+# PEXELS FETCH (ROBUST)
 # =========================
 
 def get_pexels_clips(query: str, limit: int = 2):
@@ -90,14 +124,11 @@ def get_pexels_clips(query: str, limit: int = 2):
                 height = f.get("height") or 0
                 duration = video.get("duration") or 0
 
-                print("FILE:", link, width, height, duration)
-
                 if width == 0 or height == 0:
                     continue
 
                 score = 0
 
-                # resolution scoring
                 if width >= 1920:
                     score += 500
                 elif width >= 1280:
@@ -105,11 +136,9 @@ def get_pexels_clips(query: str, limit: int = 2):
                 else:
                     score += 100
 
-                # cinematic preference
                 if width > height:
                     score += 200
 
-                # duration sweet spot
                 if 4 <= duration <= 20:
                     score += 200
 
@@ -133,7 +162,7 @@ def get_pexels_clips(query: str, limit: int = 2):
         return []
 
 # =========================
-# VOICE (PLACEHOLDER)
+# VOICE PLACEHOLDER
 # =========================
 
 async def generate_voice(text, output_path):
@@ -162,10 +191,12 @@ async def worker():
 
             for i, scene in enumerate(scenes):
 
-                query = scene.replace("HOOK:", "").replace("MIDDLE:", "").replace("DETAIL:", "").replace("ENDING:", "").strip()
+                raw_query = scene.replace("HOOK:", "").replace("MIDDLE:", "").replace("DETAIL:", "").replace("ENDING:", "").strip()
 
-                print("\nSCENE:", scene)
-                print("QUERY:", query)
+                query = simplify_query(raw_query)
+
+                print("\nRAW:", raw_query)
+                print("SIMPLIFIED:", query)
 
                 video_urls = get_pexels_clips(query, limit=2)
 
