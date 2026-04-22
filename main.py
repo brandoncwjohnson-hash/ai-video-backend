@@ -1,14 +1,19 @@
 import os
 import uuid
 import asyncio
+import subprocess
+import requests
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+import edge_tts
+
 app = FastAPI()
 
-# Enable CORS
+# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -17,34 +22,71 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Ensure outputs folder exists
-if not os.path.exists("outputs"):
-    os.makedirs("outputs")
+# Ensure folders exist
+os.makedirs("outputs", exist_ok=True)
+os.makedirs("assets", exist_ok=True)
 
-# Serve video files
+# Serve outputs
 app.mount("/outputs", StaticFiles(directory="outputs"), name="outputs")
 
-# ===== REQUEST MODEL =====
+# Request model
 class VideoRequest(BaseModel):
     idea: str
     avatar: str = "male_nomad"
-    voice: str = "marin"
+    voice: str = "en-US-GuyNeural"
     hook_only: bool = True
 
-# ===== QUEUE SYSTEM =====
+# Queue
 jobs = {}
 queue = asyncio.Queue()
 
-# ===== VIDEO GENERATION (SAFE VERSION) =====
+# ===== SIMPLE SCRIPT GENERATOR =====
+def generate_script(idea: str):
+    return f"Want to know how to {idea}? This could change your life."
+
+# ===== AUDIO GENERATION =====
+async def create_audio(text, output_file, voice):
+    communicate = edge_tts.Communicate(text, voice)
+    await communicate.save(output_file)
+
+# ===== DOWNLOAD SAMPLE VIDEO (fallback) =====
+def get_background_video(path):
+    url = "https://samplelib.com/lib/preview/mp4/sample-5s.mp4"
+    r = requests.get(url)
+    with open(path, "wb") as f:
+        f.write(r.content)
+
+# ===== VIDEO BUILDER =====
 async def generate_video(job_id, req: VideoRequest):
     try:
+        jobs[job_id]["status"] = "generating_script"
+
+        script = generate_script(req.idea)
+
+        jobs[job_id]["status"] = "generating_audio"
+
+        audio_path = f"outputs/{job_id}.mp3"
+        await create_audio(script, audio_path, req.voice)
+
+        jobs[job_id]["status"] = "fetching_video"
+
+        video_input = f"outputs/{job_id}_bg.mp4"
+        get_background_video(video_input)
+
         jobs[job_id]["status"] = "rendering"
 
-        output_path = f"outputs/{job_id}.mp4"
+        final_video = f"outputs/{job_id}.mp4"
 
-        # Create a dummy video file (temporary)
-        with open(output_path, "wb") as f:
-            f.write(b"FAKE VIDEO CONTENT")
+        subprocess.run([
+            "ffmpeg",
+            "-y",
+            "-i", video_input,
+            "-i", audio_path,
+            "-shortest",
+            "-c:v", "copy",
+            "-c:a", "aac",
+            final_video
+        ])
 
         jobs[job_id]["status"] = "complete"
         jobs[job_id]["video_url"] = f"/outputs/{job_id}.mp4"
@@ -53,7 +95,7 @@ async def generate_video(job_id, req: VideoRequest):
         jobs[job_id]["status"] = "failed"
         jobs[job_id]["error"] = str(e)
 
-# ===== WORKER =====
+# Worker
 async def worker():
     while True:
         job_id, req = await queue.get()
@@ -64,8 +106,7 @@ async def worker():
 async def startup_event():
     asyncio.create_task(worker())
 
-# ===== ROUTES =====
-
+# Routes
 @app.get("/")
 def root():
     return {"status": "running"}
