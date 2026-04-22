@@ -38,34 +38,43 @@ class VideoRequest(BaseModel):
     script: str
     avatar: str | None = None
     voice: str = "en-US-AriaNeural"
-    hook_only: bool = True
+    hook_only: bool = False
 
 # =========================
-# SCENES (IMPROVED)
+# SCENE HANDLING (GENERIC - IMPORTANT)
+# Frontend controls storytelling
+# Backend only ensures fallback structure
 # =========================
 
 def split_into_scenes(script: str):
-    base = script.lower()
+    """
+    Generic fallback scene splitter.
+    DO NOT add storytelling logic here.
+    Frontend should provide structured scenes in future.
+    """
+
+    base = script.strip()
 
     return [
-        f"{base} office stress frustration laptop work problem",
-        f"{base} ai automation software dashboard analytics screen",
-        f"{base} online income passive money business success laptop",
-        f"{base} digital nomad freedom travel beach laptop sunset"
+        f"{base} opening visual context",
+        f"{base} main explanation visual",
+        f"{base} supporting visual detail",
+        f"{base} closing visual context"
     ]
 
 # =========================
-# PEXELS QUERY (FIXED)
+# PEXELS QUERY EXTRACTION (SAFE + GENERIC)
 # =========================
 
 def get_search_query(scene: str):
     scene = scene.lower()
 
     keywords = [
-        "ai", "technology", "laptop", "office",
-        "money", "business", "success", "work",
-        "computer", "finance", "startup",
-        "remote", "travel", "freedom", "coding"
+        "people", "office", "technology", "laptop",
+        "city", "money", "business", "work",
+        "computer", "nature", "travel", "team",
+        "meeting", "desk", "phone", "data",
+        "analytics", "success"
     ]
 
     for k in keywords:
@@ -75,7 +84,7 @@ def get_search_query(scene: str):
     return "technology"
 
 # =========================
-# PEXELS FETCH
+# PEXELS VIDEO FETCH
 # =========================
 
 def get_pexels_video(query: str):
@@ -100,7 +109,7 @@ def get_pexels_video(query: str):
         return None
 
 # =========================
-# VOICE
+# VOICE GENERATION
 # =========================
 
 async def generate_voice(text, output_path):
@@ -120,8 +129,6 @@ async def worker():
         job_id, req = await queue.get()
 
         try:
-            print(f"🎬 Processing {job_id}")
-
             jobs[job_id]["status"] = "processing"
 
             # -------------------------
@@ -131,22 +138,23 @@ async def worker():
             await generate_voice(req.script, audio_path)
 
             # -------------------------
-            # SCENES → CLIPS
+            # SCENES
             # -------------------------
             scenes = split_into_scenes(req.script)
 
             video_clips = []
 
             for i, scene in enumerate(scenes):
-                print("🎬 Scene:", scene)
-
                 query = get_search_query(scene)
+
+                print("🎬 Scene:", scene)
                 print("🔎 Query:", query)
 
                 video_url = get_pexels_video(query)
 
                 if video_url:
                     clip_path = f"{OUTPUT_DIR}/{job_id}_{i}.mp4"
+
                     video_data = requests.get(video_url).content
 
                     with open(clip_path, "wb") as f:
@@ -161,7 +169,7 @@ async def worker():
                 raise Exception("No valid Pexels clips found")
 
             # -------------------------
-            # CONCAT SAFELY
+            # CONCAT LIST FILE
             # -------------------------
             list_file = f"{OUTPUT_DIR}/{job_id}_list.txt"
 
@@ -173,6 +181,9 @@ async def worker():
             if os.path.getsize(list_file) == 0:
                 raise Exception("No valid clips to concatenate")
 
+            # -------------------------
+            # FINAL OUTPUT
+            # -------------------------
             output_path = f"{OUTPUT_DIR}/{job_id}_final.mp4"
 
             cmd = [
@@ -190,13 +201,10 @@ async def worker():
 
             subprocess.run(cmd, check=True)
 
-            # -------------------------
-            # DONE
-            # -------------------------
             jobs[job_id]["status"] = "complete"
             jobs[job_id]["video_url"] = f"/outputs/{job_id}_final.mp4"
 
-            print(f"✅ DONE {job_id}")
+            print("✅ COMPLETED:", job_id)
 
         except Exception as e:
             print("❌ ERROR:", e)
@@ -211,9 +219,8 @@ async def worker():
 
 @app.on_event("startup")
 async def startup():
-    print("🚀 SERVER STARTING")
     asyncio.create_task(worker())
-    print("✅ WORKER READY")
+    print("✅ SERVER READY")
 
 # =========================
 # API
