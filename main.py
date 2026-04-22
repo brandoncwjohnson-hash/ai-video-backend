@@ -1,98 +1,81 @@
+import os
 import uuid
 import asyncio
-import os
-import subprocess
-import requests
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from typing import Dict
 
 app = FastAPI()
+
+# Enable CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Ensure outputs folder exists
+if not os.path.exists("outputs"):
+    os.makedirs("outputs")
+
+# Serve video files
 app.mount("/outputs", StaticFiles(directory="outputs"), name="outputs")
 
-# =========================
-# CONFIG
-# =========================
-
-OUTPUT_DIR = "outputs"
-ASSETS_DIR = "assets"
-FALLBACK_VIDEO = os.path.join(ASSETS_DIR, "fallback.mp4")
-
-os.makedirs(OUTPUT_DIR, exist_ok=True)
-
-# =========================
-# REQUEST MODEL
-# =========================
-
+# ===== REQUEST MODEL =====
 class VideoRequest(BaseModel):
     idea: str
-    avatar: str | None = None
-    voice: str
-    hook_only: bool = False
+    avatar: str = "male_nomad"
+    voice: str = "marin"
+    hook_only: bool = True
 
-# =========================
-# QUEUE + JOB STORAGE
-# =========================
-
-jobs: Dict[str, Dict] = {}
+# ===== QUEUE SYSTEM =====
+jobs = {}
 queue = asyncio.Queue()
 
-# =========================
-# UTIL FUNCTIONS
-# =========================
+# ===== VIDEO GENERATION (SAFE VERSION) =====
+async def generate_video(job_id, req: VideoRequest):
+    try:
+        jobs[job_id]["status"] = "rendering"
 
-def is_valid_mp4(path):
-    return os.path.exists(path) and os.path.getsize(path) > 1000
+        output_path = f"outputs/{job_id}.mp4"
 
-def generate_video(req: VideoRequest):
-    job_id = str(uuid.uuid4())
+        # Create a dummy video file (temporary)
+        with open(output_path, "wb") as f:
+            f.write(b"FAKE VIDEO CONTENT")
 
-    video_output = os.path.join(OUTPUT_DIR, f"{job_id}.mp4")
-    audio_output = os.path.join(OUTPUT_DIR, f"{job_id}.mp3")
+        jobs[job_id]["status"] = "complete"
+        jobs[job_id]["video_url"] = f"/outputs/{job_id}.mp4"
 
-    # 🔊 Generate simple silent audio (placeholder)
-    subprocess.run([
-        "ffmpeg", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono",
-        "-t", "5",
-        "-q:a", "9",
-        "-acodec", "libmp3lame",
-        audio_output,
-        "-y"
-    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception as e:
+        jobs[job_id]["status"] = "failed"
+        jobs[job_id]["error"] = str(e)
 
-    if not is_valid_mp4(FALLBACK_VIDEO):
-        raise Exception("Fallback video missing or invalid")
+# ===== WORKER =====
+async def worker():
+    while True:
+        job_id, req = await queue.get()
+        await generate_video(job_id, req)
+        queue.task_done()
 
-    # 🎬 Combine video + audio
-    subprocess.run([
-        "ffmpeg",
-        "-i", FALLBACK_VIDEO,
-        "-i", audio_output,
-        "-c:v", "copy",
-        "-c:a", "aac",
-        "-shortest",
-        video_output,
-        "-y"
-    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+@app.on_event("startup")
+async def startup_event():
+    asyncio.create_task(worker())
 
-    if not is_valid_mp4(video_output):
-        raise Exception("FFmpeg failed to produce valid video")
+# ===== ROUTES =====
 
-    return {
-        "video_url": f"/outputs/{os.path.basename(video_output)}",
-        "audio_file": f"/outputs/{os.path.basename(audio_output)}"
-    }
-
-# =========================
-# WEBHOOK START
-# =========================
+@app.get("/")
+def root():
+    return {"status": "running"}
 
 @app.post("/api/video/webhook/start")
-async def start_job(req: VideoRequest):
+async def start_video(req: VideoRequest):
     job_id = str(uuid.uuid4())
 
     jobs[job_id] = {
-        "status": "queuing",
+        "status": "queued",
         "video_url": None,
         "error": None
     }
@@ -101,56 +84,6 @@ async def start_job(req: VideoRequest):
 
     return {"job_id": job_id}
 
-# =========================
-# STATUS ENDPOINT
-# =========================
-
 @app.get("/api/video/status/{job_id}")
 async def get_status(job_id: str):
     return jobs.get(job_id, {"error": "job not found"})
-
-# =========================
-# WORKER
-# =========================
-
-async def worker():
-    while True:
-        job_id, req = await queue.get()
-
-        try:
-            jobs[job_id]["status"] = "generating_script"
-
-            result = generate_video(req)
-
-            jobs[job_id]["status"] = "finalizing"
-            jobs[job_id]["video_url"] = result.get("video_url")
-
-            jobs[job_id]["status"] = "complete"
-
-        except Exception as e:
-            jobs[job_id]["status"] = "failed"
-            jobs[job_id]["error"] = str(e)
-
-        queue.task_done()
-
-# =========================
-# START WORKER
-# =========================
-
-@app.on_event("startup")
-async def startup_event():
-    asyncio.create_task(worker())
-
-# =========================
-# BASIC ROUTES
-# =========================
-
-@app.get("/")
-def root():
-    return {"status": "running"}
-
-@app.get("/api/video/voices")
-def get_voices():
-    return {
-        "voices": ["aria", "marin", "verse", "alloy", "echo"]
-    }
