@@ -19,7 +19,7 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 app.mount("/outputs", StaticFiles(directory=OUTPUT_DIR), name="outputs")
 
-print("🔥 MVP VIDEO BACKEND STARTED")
+print("🔥 MVP VIDEO BACKEND RUNNING")
 
 # =========================
 # CONFIG
@@ -41,23 +41,25 @@ class VideoRequest(BaseModel):
     hook_only: bool = True
 
 # =========================
-# SAFE PEXELS SEARCH
+# SCENE INTELLIGENCE (UPGRADED)
 # =========================
 
-def get_search_query(script: str):
-    keywords = [
-        "money", "business", "ai", "tech",
-        "success", "office", "laptop",
-        "work", "online", "startup"
+def split_into_scenes(script: str):
+    base = script.lower()
+
+    return [
+        f"{base} hook frustration problem office stress laptop close up",
+        f"{base} ai automation software dashboard analytics screen",
+        f"{base} online income passive income money success typing laptop",
+        f"{base} digital nomad freedom travel working beach sunset laptop"
     ]
 
-    lower = script.lower()
+# =========================
+# PEXELS SEARCH (IMPROVED)
+# =========================
 
-    for k in keywords:
-        if k in lower:
-            return k
-
-    return "technology"
+def get_search_query(scene: str):
+    return scene
 
 
 def get_pexels_video(query: str):
@@ -113,33 +115,46 @@ async def worker():
             await generate_voice(req.script, audio_path)
 
             # -------------------------
-            # 2. PEXELS VIDEO (FIXED)
+            # 2. SCENES → PEXELS CLIPS
             # -------------------------
-            query = get_search_query(req.script)
-            print("🔎 Pexels query:", query)
+            scenes = split_into_scenes(req.script)
 
-            video_url = get_pexels_video(query)
+            video_clips = []
 
-            # fallback (prevents total failure)
-            if not video_url:
-                print("⚠️ No Pexels video found, using fallback")
-                video_url = "https://player.vimeo.com/external/371452163.sd.mp4?s=1"
+            for i, scene in enumerate(scenes):
+                print("🎬 Scene:", scene)
 
-            video_path = f"{OUTPUT_DIR}/{job_id}.mp4"
+                video_url = get_pexels_video(get_search_query(scene))
 
-            video_data = requests.get(video_url).content
-            with open(video_path, "wb") as f:
-                f.write(video_data)
+                if video_url:
+                    clip_path = f"{OUTPUT_DIR}/{job_id}_{i}.mp4"
+                    video_data = requests.get(video_url).content
+
+                    with open(clip_path, "wb") as f:
+                        f.write(video_data)
+
+                    video_clips.append(clip_path)
+
+            if not video_clips:
+                raise Exception("No valid Pexels clips found")
 
             # -------------------------
-            # 3. MERGE
+            # 3. CONCAT CLIPS
             # -------------------------
+            list_file = f"{OUTPUT_DIR}/{job_id}_list.txt"
+
+            with open(list_file, "w") as f:
+                for clip in video_clips:
+                    f.write(f"file '{clip}'\n")
+
             output_path = f"{OUTPUT_DIR}/{job_id}_final.mp4"
 
             cmd = [
                 "ffmpeg",
                 "-y",
-                "-i", video_path,
+                "-f", "concat",
+                "-safe", "0",
+                "-i", list_file,
                 "-i", audio_path,
                 "-c:v", "copy",
                 "-c:a", "aac",
@@ -174,7 +189,7 @@ async def startup():
 
     asyncio.create_task(worker())
 
-    print("✅ WORKER INITIALIZED")
+    print("✅ WORKER READY")
 
 # =========================
 # API
