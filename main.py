@@ -41,20 +41,39 @@ class VideoRequest(BaseModel):
     hook_only: bool = True
 
 # =========================
-# PEXELS
+# SAFE PEXELS SEARCH
 # =========================
+
+def get_search_query(script: str):
+    keywords = [
+        "money", "business", "ai", "tech",
+        "success", "office", "laptop",
+        "work", "online", "startup"
+    ]
+
+    lower = script.lower()
+
+    for k in keywords:
+        if k in lower:
+            return k
+
+    return "technology"
+
 
 def get_pexels_video(query: str):
     try:
-        url = f"https://api.pexels.com/videos/search?query={query}&per_page=1"
+        url = f"https://api.pexels.com/videos/search?query={query}&per_page=5"
         headers = {"Authorization": PEXELS_API_KEY}
 
         res = requests.get(url, headers=headers, timeout=10)
         data = res.json()
 
-        if "videos" in data and len(data["videos"]) > 0:
-            video_files = data["videos"][0]["video_files"]
-            return video_files[0]["link"]
+        videos = data.get("videos", [])
+
+        for video in videos:
+            files = video.get("video_files", [])
+            if files:
+                return files[0]["link"]
 
         return None
 
@@ -73,7 +92,7 @@ async def generate_voice(text, output_path):
     await communicate.save(output_path)
 
 # =========================
-# WORKER (FIXED)
+# WORKER
 # =========================
 
 async def worker():
@@ -88,19 +107,23 @@ async def worker():
             jobs[job_id]["status"] = "processing"
 
             # -------------------------
-            # 1. VOICE (FIXED)
+            # 1. VOICE
             # -------------------------
             audio_path = f"{OUTPUT_DIR}/{job_id}.mp3"
             await generate_voice(req.script, audio_path)
 
             # -------------------------
-            # 2. PEXELS VIDEO
+            # 2. PEXELS VIDEO (FIXED)
             # -------------------------
-            query = " ".join(req.script.split(" ")[:3])
+            query = get_search_query(req.script)
+            print("🔎 Pexels query:", query)
+
             video_url = get_pexels_video(query)
 
+            # fallback (prevents total failure)
             if not video_url:
-                raise Exception("No Pexels video found")
+                print("⚠️ No Pexels video found, using fallback")
+                video_url = "https://player.vimeo.com/external/371452163.sd.mp4?s=1"
 
             video_path = f"{OUTPUT_DIR}/{job_id}.mp4"
 
@@ -109,7 +132,7 @@ async def worker():
                 f.write(video_data)
 
             # -------------------------
-            # 3. MERGE (FFMPEG)
+            # 3. MERGE
             # -------------------------
             output_path = f"{OUTPUT_DIR}/{job_id}_final.mp4"
 
@@ -142,18 +165,16 @@ async def worker():
         queue.task_done()
 
 # =========================
-# STARTUP (SAFE)
+# STARTUP
 # =========================
 
 @app.on_event("startup")
 async def startup():
     print("🚀 SERVER STARTING")
 
-    try:
-        asyncio.create_task(worker())
-        print("✅ WORKER STARTED")
-    except Exception as e:
-        print("❌ WORKER START FAILED:", e)
+    asyncio.create_task(worker())
+
+    print("✅ WORKER INITIALIZED")
 
 # =========================
 # API
