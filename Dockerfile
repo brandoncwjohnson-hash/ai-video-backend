@@ -2,27 +2,49 @@ FROM python:3.10
 
 WORKDIR /app
 
-# system deps
+# =========================
+# SYSTEM DEPENDENCIES
+# =========================
+
 RUN apt-get update && apt-get install -y \
     git \
     ffmpeg \
     libgl1 \
-    libglib2.0-0
+    libglib2.0-0 \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
 
-# copy backend
+# =========================
+# COPY APP
+# =========================
+
 COPY . /app
 
-# install python deps
+# =========================
+# PYTHON DEPENDENCIES
+# =========================
+
 RUN pip install --upgrade pip
+
 RUN pip install fastapi uvicorn requests pydantic edge-tts
 
-# clone SadTalker
-RUN git clone https://github.com/OpenTalker/SadTalker.git
+# =========================
+# SADTALKER INSTALL (FIXED)
+# =========================
 
-# install SadTalker deps
+RUN rm -rf SadTalker && \
+    git clone --depth 1 https://github.com/OpenTalker/SadTalker.git
+
 RUN pip install -r SadTalker/requirements.txt || true
 
-# expose port
+# =========================
+# PORT
+# =========================
+
 EXPOSE 8000
+
+# =========================
+# START SERVER
+# =========================
 
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
