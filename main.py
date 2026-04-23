@@ -1,116 +1,133 @@
+from fastapi import FastAPI, UploadFile, File
+from pydantic import BaseModel
+import uuid
 import os
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+import requests
+import subprocess
 
 app = FastAPI()
 
-# =========================
-# OUTPUT DIRECTORY
-# =========================
-OUTPUT_DIR = "outputs"
-os.makedirs(OUTPUT_DIR, exist_ok=True)
+PEXELS_API_KEY = os.getenv("PEXELS_API_KEY")
 
+# -----------------------------
+# INPUT MODELS
+# -----------------------------
 
-# =========================
-# VIDEO GENERATION LAYER (ABSTRACTION)
-# =========================
-def generate_scene_video(scene, job_id, index):
-    """
-    SINGLE ENTRY POINT for video generation.
+class Scene(BaseModel):
+    setting: str
+    action: str
+    object: str = ""
+    duration: int
 
-    CURRENT STATE:
-    - placeholder implementation
+class VideoRequest(BaseModel):
+    script: str
+    scenes: list[Scene]
 
-    NEXT STATE:
-    - Stable Video Diffusion integration (GPU worker)
-    """
+# -----------------------------
+# SIMPLE IN-MEMORY CACHE (MVP)
+# Replace with Redis later
+# -----------------------------
 
-    clip_path = os.path.join(
-        OUTPUT_DIR,
-        f"{job_id}_scene_{index}.mp4"
-    )
+CACHE = {}
 
-    # TEMP PLACEHOLDER (safe fallback)
-    with open(clip_path, "wb") as f:
-        f.write(b"placeholder")
+# -----------------------------
+# DIRECTOR ENGINE
+# -----------------------------
 
-    return clip_path
+def build_query(scene: Scene):
+    parts = [scene.setting, scene.object, scene.action]
+    return " ".join([p for p in parts if p]).strip()
 
+# -----------------------------
+# PEXELS FETCH
+# -----------------------------
 
-# =========================
-# PIPELINE: BUILD VIDEO FROM SCENES
-# =========================
-def generate_video_from_scenes(scenes, job_id):
+def fetch_pexels_video(query):
+    if query in CACHE:
+        return CACHE[query]
+
+    url = f"https://api.pexels.com/videos/search?query={query}&per_page=5"
+
+    headers = {
+        "Authorization": PEXELS_API_KEY
+    }
+
+    res = requests.get(url, headers=headers)
+    data = res.json()
 
     clips = []
 
-    for i, scene in enumerate(scenes):
+    for video in data.get("videos", []):
+        files = video.get("video_files", [])
+        if files:
+            clips.append(files[0]["link"])
 
-        clip_path = generate_scene_video(scene, job_id, i)
-        clips.append(clip_path)
-
+    CACHE[query] = clips
     return clips
 
+# -----------------------------
+# DOWNLOAD VIDEO
+# -----------------------------
 
-# =========================
-# PROCESS JOB
-# =========================
-def process_video_job(job_id, scenes):
+def download_clip(url, filename):
+    r = requests.get(url)
+    with open(filename, "wb") as f:
+        f.write(r.content)
 
-    try:
-        clips = generate_video_from_scenes(scenes, job_id)
+# -----------------------------
+# RENDER VIDEO (SIMPLE MVP)
+# -----------------------------
 
-        # FINAL OUTPUT (FFMPEG will replace this later)
-        final_video_path = os.path.join(
-            OUTPUT_DIR,
-            f"{job_id}_final.mp4"
-        )
+def render_video(scene_clips):
+    os.makedirs("output", exist_ok=True)
 
-        # Placeholder final video file
-        with open(final_video_path, "wb") as f:
-            f.write(b"placeholder-final-video")
+    inputs = []
 
-        return {
-            "status": "complete",
-            "video_url": final_video_path,
-            "error": None
-        }
+    for i, clip in enumerate(scene_clips):
+        filename = f"output/clip_{i}.mp4"
+        download_clip(clip, filename)
+        inputs.append(filename)
 
-    except Exception as e:
-        return {
-            "status": "failed",
-            "video_url": None,
-            "error": str(e)
-        }
+    list_file = "output/list.txt"
 
+    with open(list_file, "w") as f:
+        for inp in inputs:
+            f.write(f"file '{inp}'\n")
 
-# =========================
-# API ENDPOINT
-# =========================
-@app.post("/api/video/webhook/start")
-async def start_video_job(request: Request):
+    output_path = "output/final.mp4"
 
-    body = await request.json()
+    subprocess.run([
+        "ffmpeg",
+        "-y",
+        "-f", "concat",
+        "-safe", "0",
+        "-i", list_file,
+        "-c", "copy",
+        output_path
+    ])
 
-    job_id = body.get("job_id", "unknown")
-    scenes = body.get("scenes", [])
+    return output_path
 
-    result = process_video_job(job_id, scenes)
+# -----------------------------
+# MAIN ENDPOINT
+# -----------------------------
 
-    return JSONResponse({
-        "job_id": job_id,
-        "status": result["status"],
-        "video_url": result["video_url"],
-        "error": result["error"]
-    })
+@app.post("/generate-video")
+def generate_video(req: VideoRequest):
 
+    all_clips = []
 
-# =========================
-# HEALTH CHECK
-# =========================
-@app.get("/")
-def root():
+    for scene in req.scenes:
+
+        query = build_query(scene)
+        clips = fetch_pexels_video(query)
+
+        if clips:
+            all_clips.append(clips[0])  # pick best simple version
+
+    output = render_video(all_clips)
+
     return {
-        "status": "ok",
-        "service": "ai-video-backend"
+        "status": "success",
+        "video_path": output
     }
