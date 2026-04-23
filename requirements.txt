@@ -1,5 +1,7 @@
 fastapi
 uvicorn
+python-multipart
 requests
-pydantic
-edge-tts
+pillow
+moviepy
+openai
