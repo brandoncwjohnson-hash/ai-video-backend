@@ -1,133 +1,118 @@
-from fastapi import FastAPI, UploadFile, File
-from pydantic import BaseModel
+from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse
+import requests
 import uuid
 import os
-import requests
-import subprocess
+from PIL import Image, ImageDraw, ImageFont
+from moviepy.editor import ImageClip, concatenate_videoclips
 
 app = FastAPI()
 
-PEXELS_API_KEY = os.getenv("PEXELS_API_KEY")
+OUTPUT_DIR = "outputs"
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# -----------------------------
-# INPUT MODELS
-# -----------------------------
+FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 
-class Scene(BaseModel):
-    setting: str
-    action: str
-    object: str = ""
-    duration: int
-
-class VideoRequest(BaseModel):
-    script: str
-    scenes: list[Scene]
-
-# -----------------------------
-# SIMPLE IN-MEMORY CACHE (MVP)
-# Replace with Redis later
-# -----------------------------
-
-CACHE = {}
-
-# -----------------------------
-# DIRECTOR ENGINE
-# -----------------------------
-
-def build_query(scene: Scene):
-    parts = [scene.setting, scene.object, scene.action]
-    return " ".join([p for p in parts if p]).strip()
-
-# -----------------------------
-# PEXELS FETCH
-# -----------------------------
-
-def fetch_pexels_video(query):
-    if query in CACHE:
-        return CACHE[query]
-
-    url = f"https://api.pexels.com/videos/search?query={query}&per_page=5"
+def generate_image(prompt, api_key):
+    url = "https://api.openai.com/v1/images/generations"
 
     headers = {
-        "Authorization": PEXELS_API_KEY
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
     }
 
-    res = requests.get(url, headers=headers)
-    data = res.json()
+    data = {
+        "model": "gpt-image-1",
+        "prompt": prompt,
+        "size": "1024x1024"
+    }
 
-    clips = []
+    response = requests.post(url, headers=headers, json=data)
+    result = response.json()
 
-    for video in data.get("videos", []):
-        files = video.get("video_files", [])
-        if files:
-            clips.append(files[0]["link"])
+    image_url = result["data"][0]["url"]
+    image_data = requests.get(image_url).content
 
-    CACHE[query] = clips
-    return clips
+    filename = f"{uuid.uuid4()}.jpg"
+    path = os.path.join(OUTPUT_DIR, filename)
 
-# -----------------------------
-# DOWNLOAD VIDEO
-# -----------------------------
+    with open(path, "wb") as f:
+        f.write(image_data)
 
-def download_clip(url, filename):
-    r = requests.get(url)
-    with open(filename, "wb") as f:
-        f.write(r.content)
+    return path
 
-# -----------------------------
-# RENDER VIDEO (SIMPLE MVP)
-# -----------------------------
+def add_text(image_path, text):
+    img = Image.open(image_path).convert("RGB")
+    draw = ImageDraw.Draw(img)
 
-def render_video(scene_clips):
-    os.makedirs("output", exist_ok=True)
+    font = ImageFont.truetype(FONT_PATH, 60)
 
-    inputs = []
+    width, height = img.size
+    text = text.upper()
 
-    for i, clip in enumerate(scene_clips):
-        filename = f"output/clip_{i}.mp4"
-        download_clip(clip, filename)
-        inputs.append(filename)
+    # wrap text
+    lines = []
+    words = text.split()
+    line = ""
 
-    list_file = "output/list.txt"
+    for word in words:
+        test_line = f"{line} {word}".strip()
+        w, h = draw.textsize(test_line, font=font)
 
-    with open(list_file, "w") as f:
-        for inp in inputs:
-            f.write(f"file '{inp}'\n")
+        if w < width * 0.8:
+            line = test_line
+        else:
+            lines.append(line)
+            line = word
 
-    output_path = "output/final.mp4"
+    lines.append(line)
 
-    subprocess.run([
-        "ffmpeg",
-        "-y",
-        "-f", "concat",
-        "-safe", "0",
-        "-i", list_file,
-        "-c", "copy",
-        output_path
-    ])
+    y = height // 2 - (len(lines) * 40)
+
+    for l in lines:
+        w, h = draw.textsize(l, font=font)
+        x = (width - w) / 2
+
+        draw.text((x+2, y+2), l, font=font, fill="black")
+        draw.text((x, y), l, font=font, fill="white")
+
+        y += h + 10
+
+    output_path = image_path.replace(".jpg", "_text.jpg")
+    img.save(output_path)
 
     return output_path
 
-# -----------------------------
-# MAIN ENDPOINT
-# -----------------------------
+def create_clip(image_path, duration=4):
+    clip = ImageClip(image_path).set_duration(duration)
+
+    # simple zoom effect
+    clip = clip.resize(lambda t: 1 + 0.05 * t)
+
+    return clip
 
 @app.post("/generate-video")
-def generate_video(req: VideoRequest):
+async def generate_video(request: Request):
+    data = await request.json()
 
-    all_clips = []
+    scenes = data["scenes"]
+    api_key = data["openai_api_key"]
 
-    for scene in req.scenes:
+    clips = []
 
-        query = build_query(scene)
-        clips = fetch_pexels_video(query)
+    for scene in scenes:
+        text = scene["text"]
+        prompt = scene["image_prompt"]
 
-        if clips:
-            all_clips.append(clips[0])  # pick best simple version
+        img_path = generate_image(prompt, api_key)
+        img_with_text = add_text(img_path, text)
 
-    output = render_video(all_clips)
+        clip = create_clip(img_with_text)
+        clips.append(clip)
 
-    return {
-        "status": "success",
-        "video_path": output
-    }
+    final = concatenate_videoclips(clips, method="compose")
+
+    output_file = os.path.join(OUTPUT_DIR, f"{uuid.uuid4()}.mp4")
+    final.write_videofile(output_file, fps=24)
+
+    return FileResponse(output_file, media_type="video/mp4", filename="video.mp4")
